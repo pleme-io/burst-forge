@@ -112,7 +112,7 @@ fn verify_infra(namespace: &str, kubeconfig: Option<&str>) -> anyhow::Result<()>
 
     // Check Akeyless gateway
     let gw = kubectl(
-        &["-n", "akeyless-system", "get", "pods", "-l", "app=akeyless-api-gateway", "--no-headers"],
+        &["-n", "akeyless-system", "get", "pods", "-l", "app.kubernetes.io/name=akeyless-api-gateway", "--no-headers"],
         kubeconfig,
     )?;
     let gw_ready = gw.lines().filter(|l| l.contains("Running")).count();
@@ -120,7 +120,7 @@ fn verify_infra(namespace: &str, kubeconfig: Option<&str>) -> anyhow::Result<()>
 
     // Check injection webhook
     let inj = kubectl(
-        &["-n", "akeyless-system", "get", "pods", "-l", "app.kubernetes.io/name=akeyless-secrets-injection", "--no-headers"],
+        &["-n", "akeyless-system", "get", "pods", "-l", "app=akeyless-secrets-injection", "--no-headers"],
         kubeconfig,
     )?;
     let inj_ready = inj.lines().filter(|l| l.contains("Running")).count();
