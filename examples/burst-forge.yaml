@@ -1,0 +1,35 @@
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+
+cache_registry: "image-cache.image-cache.svc.cluster.local:5000"
+required_images:
+  - "akeyless/k8s-secrets-sidecar:0.35.1"
+  - "library/nginx:1.27-alpine"
+
+flux_kustomizations:
+  - infrastructure-image-cache
+  - infrastructure-akeyless
+  - infrastructure-akeyless-injection
+  - scale-test-workloads
+
+akeyless_namespace: akeyless-system
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-api-gateway
+webhook_release: akeyless-secrets-injection
+
+scenarios:
+  - name: small
+    replicas: 50
+    gateway_replicas: 1
+    webhook_replicas: 1
+  - name: medium
+    replicas: 150
+    gateway_replicas: 2
+    webhook_replicas: 2
+  - name: large
+    replicas: 300
+    gateway_replicas: 3
+    webhook_replicas: 3
