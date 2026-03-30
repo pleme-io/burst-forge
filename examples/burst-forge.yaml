@@ -1,3 +1,6 @@
+# burst-forge scaling matrix configuration
+# Based on historical Akeyless injection scale test data
+
 namespace: scale-test
 deployment: nginx-burst
 timeout_secs: 600
@@ -6,10 +9,12 @@ poll_interval_secs: 5
 cache_registry: "image-cache.image-cache.svc.cluster.local:5000"
 required_images:
   - "akeyless/k8s-secrets-sidecar:0.35.1"
+  - "akeyless/k8s-webhook-server:latest"
   - "library/nginx:1.27-alpine"
 
 flux_kustomizations:
   - infrastructure-image-cache
+  - infrastructure-image-sync
   - infrastructure-akeyless
   - infrastructure-akeyless-injection
   - scale-test-workloads
@@ -17,19 +22,38 @@ flux_kustomizations:
 akeyless_namespace: akeyless-system
 gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
 webhook_label: "app=akeyless-secrets-injection"
-gateway_release: akeyless-api-gateway
+gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection
 
+# Scaling matrix — work backwards from 1000 pods
+# Historical data: GW = pods/90 with 40% headroom
 scenarios:
-  - name: small
+  - name: "1000-pods"
+    replicas: 1000
+    gateway_replicas: 6
+    webhook_replicas: 7
+
+  - name: "750-pods"
+    replicas: 750
+    gateway_replicas: 5
+    webhook_replicas: 5
+
+  - name: "500-pods"
+    replicas: 500
+    gateway_replicas: 3
+    webhook_replicas: 4
+
+  - name: "300-pods"
+    replicas: 300
+    gateway_replicas: 2
+    webhook_replicas: 3
+
+  - name: "150-pods"
+    replicas: 150
+    gateway_replicas: 1
+    webhook_replicas: 2
+
+  - name: "50-pods"
     replicas: 50
     gateway_replicas: 1
     webhook_replicas: 1
-  - name: medium
-    replicas: 150
-    gateway_replicas: 2
-    webhook_replicas: 2
-  - name: large
-    replicas: 300
-    gateway_replicas: 3
-    webhook_replicas: 3
