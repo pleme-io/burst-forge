@@ -13,6 +13,7 @@ mod kubectl;
 mod matrix;
 mod nodes;
 mod output;
+mod phases;
 mod report;
 mod types;
 mod verify;

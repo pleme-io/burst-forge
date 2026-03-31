@@ -14,6 +14,14 @@ pub struct BurstResult {
     pub injection_success_rate: f64,
     pub time_to_first_ready_ms: u64,
     pub time_to_all_ready_ms: Option<u64>,
+    /// Time until all pods were admitted (injected == replicas).
+    pub time_to_full_admission_ms: Option<u64>,
+    /// Time until 50% of pods were Running.
+    pub time_to_50pct_running_ms: Option<u64>,
+    /// Admission rate: pods/sec through webhook.
+    pub admission_rate_pods_per_sec: f64,
+    /// Gateway throughput: pods/sec through init container.
+    pub gateway_throughput_pods_per_sec: f64,
     pub duration_ms: u64,
     pub nodes: u32,
     pub iteration: u32,
@@ -45,6 +53,36 @@ pub struct ImageStatus {
     pub tags: Vec<String>,
 }
 
+/// Warmup sub-phase timings (Phase 2).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WarmupTimings {
+    /// Time for nodes to reach Ready+Schedulable (ms).
+    pub nodes_ms: u64,
+    /// Time for image warmup DaemonSet rollout (ms).
+    pub images_ms: u64,
+    /// Time for gateway deployment to reach desired replicas (ms).
+    pub gateway_ms: u64,
+    /// Time for webhook deployment to reach desired replicas (ms).
+    pub webhook_ms: u64,
+    /// Time for all gates to pass (ms).
+    pub gates_ms: u64,
+    /// Total warmup time (ms).
+    pub total_ms: u64,
+}
+
+/// Phase timing breakdown for a scenario.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PhaseTimings {
+    /// Phase 1: RESET -- time to reach verified zero state (ms).
+    pub reset_ms: u64,
+    /// Phase 2: WARMUP -- total time to infrastructure ready (ms).
+    pub warmup_ms: u64,
+    /// Phase 2 sub-phase breakdown.
+    pub warmup_detail: WarmupTimings,
+    /// Phase 3: EXECUTION -- time for burst test (ms).
+    pub execution_ms: u64,
+}
+
 /// Result of a single scaling scenario.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScenarioResult {
@@ -54,6 +92,7 @@ pub struct ScenarioResult {
     pub webhook_replicas: u32,
     pub verify: Option<VerifyResult>,
     pub burst: Option<BurstResult>,
+    pub phase_timings: Option<PhaseTimings>,
     pub error: Option<String>,
 }
 

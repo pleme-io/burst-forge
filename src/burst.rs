@@ -68,9 +68,12 @@ pub fn run_burst(
 
     // Poll pod status until timeout
     let mut first_ready_time: Option<u64> = None;
+    let mut full_admission_time: Option<u64> = None;
+    let mut half_running_time: Option<u64> = None;
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
     let timeout_duration = Duration::from_secs(config.timeout_secs);
     let app_label = config.resolved_pod_label();
+    let half_target = replicas / 2;
 
     loop {
         if burst_start.elapsed() > timeout_duration {
@@ -100,6 +103,14 @@ pub fn run_burst(
             first_ready_time = Some(elapsed_ms);
         }
 
+        if running >= half_target && half_running_time.is_none() {
+            half_running_time = Some(elapsed_ms);
+        }
+
+        if injected >= replicas && full_admission_time.is_none() {
+            full_admission_time = Some(elapsed_ms);
+        }
+
         output::print_progress_ms(
             elapsed_ms,
             &format!(
@@ -110,6 +121,18 @@ pub fn run_burst(
         if running >= replicas {
             let rate = injection_rate(running, injected);
             output::print_burst_complete(running, replicas, elapsed_ms, rate);
+            #[allow(clippy::cast_precision_loss)]
+            let admission_rate = if elapsed_ms > 0 {
+                f64::from(injected) / (elapsed_ms as f64 / 1000.0)
+            } else {
+                0.0
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let gw_throughput = if elapsed_ms > 0 {
+                f64::from(running) / (elapsed_ms as f64 / 1000.0)
+            } else {
+                0.0
+            };
             return Ok(BurstResult {
                 timestamp,
                 replicas_requested: replicas,
@@ -120,6 +143,10 @@ pub fn run_burst(
                 injection_success_rate: rate,
                 time_to_first_ready_ms: first_ready_time.unwrap_or(0),
                 time_to_all_ready_ms: Some(elapsed_ms),
+                time_to_full_admission_ms: full_admission_time,
+                time_to_50pct_running_ms: half_running_time,
+                admission_rate_pods_per_sec: admission_rate,
+                gateway_throughput_pods_per_sec: gw_throughput,
                 #[allow(clippy::cast_possible_truncation)]
                 duration_ms: start.elapsed().as_millis() as u64,
                 #[allow(clippy::cast_possible_truncation)]
@@ -150,6 +177,21 @@ pub fn run_burst(
     let (running, pending, failed, injected) =
         count_pod_states(items, config);
 
+    #[allow(clippy::cast_possible_truncation)]
+    let final_elapsed_ms = burst_start.elapsed().as_millis() as u64;
+    #[allow(clippy::cast_precision_loss)]
+    let admission_rate = if final_elapsed_ms > 0 {
+        f64::from(injected) / (final_elapsed_ms as f64 / 1000.0)
+    } else {
+        0.0
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let gw_throughput = if final_elapsed_ms > 0 {
+        f64::from(running) / (final_elapsed_ms as f64 / 1000.0)
+    } else {
+        0.0
+    };
+
     Ok(BurstResult {
         timestamp,
         replicas_requested: replicas,
@@ -160,6 +202,10 @@ pub fn run_burst(
         injection_success_rate: injection_rate(running, injected),
         time_to_first_ready_ms: first_ready_time.unwrap_or(0),
         time_to_all_ready_ms: None,
+        time_to_full_admission_ms: full_admission_time,
+        time_to_50pct_running_ms: half_running_time,
+        admission_rate_pods_per_sec: admission_rate,
+        gateway_throughput_pods_per_sec: gw_throughput,
         #[allow(clippy::cast_possible_truncation)]
         duration_ms: start.elapsed().as_millis() as u64,
         nodes: 0,

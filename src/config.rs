@@ -181,6 +181,10 @@ pub struct Config {
     #[serde(default)]
     pub confluence: Option<ConfluenceConfig>,
 
+    /// Reset phase configuration (Phase 1).
+    #[serde(default)]
+    pub reset: ResetConfig,
+
     /// Whether to require all gates to pass (default: true).
     ///
     /// When true, any gate failure aborts the scenario immediately.
@@ -252,6 +256,27 @@ impl Config {
     }
 }
 
+/// Reset phase (Phase 1) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetConfig {
+    /// Force delete immediately instead of waiting for graceful termination.
+    #[serde(default)]
+    pub force_delete: bool,
+    /// Seconds to wait for graceful termination before force deleting
+    /// (only used when `force_delete` is false).
+    #[serde(default = "default_grace_period")]
+    pub grace_period_secs: u64,
+}
+
+impl Default for ResetConfig {
+    fn default() -> Self {
+        Self {
+            force_delete: false,
+            grace_period_secs: default_grace_period(),
+        }
+    }
+}
+
 /// Confluence reporting configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfluenceConfig {
@@ -313,6 +338,7 @@ fn default_image_cache_namespace() -> String { "image-cache".to_string() }
 fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_string() }
 fn default_flux_namespace() -> String { "flux-system".to_string() }
 fn default_warmup_timeout() -> u64 { 300 }
+fn default_grace_period() -> u64 { 30 }
 
 /// Discover and load config via shikumi.
 ///

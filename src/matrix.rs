@@ -1,18 +1,14 @@
 //! Scaling matrix — run multiple scenarios, collect results.
 
-use std::time::Duration;
-
 use chrono::Utc;
 
-use crate::burst;
 use crate::config::Config;
-use crate::drain;
 use crate::gates;
 use crate::kubectl::KubeCtl;
 use crate::nodes;
 use crate::output;
-use crate::types::{MatrixReport, ScenarioResult};
-use crate::verify;
+use crate::phases;
+use crate::types::{MatrixReport, PhaseTimings, ScenarioResult};
 
 /// Run the scaling matrix: iterate scenarios, patch replicas, verify, burst.
 ///
@@ -53,50 +49,6 @@ pub fn run_matrix(
         );
     }
 
-    // Scale up node group if configured — failure is fatal
-    if let Some(ng) = &config.node_group {
-        let max_nodes_needed = scenarios
-            .iter()
-            .map(|s| {
-                s.nodes
-                    .unwrap_or_else(|| nodes::calculate_nodes(s.replicas, ng.pods_per_node))
-            })
-            .max()
-            .unwrap_or(1)
-            .min(ng.max_nodes);
-
-        output::print_phase(&format!("Node Pre-Heat ({max_nodes_needed} nodes)"));
-
-        // Node scaling failure is fatal — cannot run burst tests without nodes
-        nodes::scale_node_group(ng, max_nodes_needed)
-            .map_err(|e| anyhow::anyhow!("FATAL: Failed to scale node group to {max_nodes_needed}: {e}"))?;
-
-        // [Gate 1] Node Ready Gate — wait for Ready+Schedulable nodes
-        let gate1 = gates::wait_for_ready_schedulable_nodes(
-            kubectl,
-            max_nodes_needed,
-            Duration::from_secs(config.timeout_secs),
-            Duration::from_secs(config.node_poll_interval_secs),
-        )?;
-        gates::enforce(&gate1, config.strict_gates)?;
-
-        nodes::tag_nodes(kubectl, "burst-forge=true")?;
-
-        // [Gate 2] Warmup Gate — DaemonSet matches schedulable node count
-        if let Some(warmup) = &config.warmup_daemonset {
-            output::print_phase(&format!(
-                "Warmup DaemonSet {}/{}", warmup.namespace, warmup.name
-            ));
-            let gate2 = gates::check_warmup_gate(
-                kubectl,
-                &warmup.namespace,
-                &warmup.name,
-                Duration::from_secs(warmup.timeout_secs),
-            )?;
-            gates::enforce(&gate2, config.strict_gates)?;
-        }
-    }
-
     output::print_phase(&format!("Scaling Matrix: {} scenarios", scenarios.len()));
 
     let mut results = Vec::new();
@@ -114,25 +66,16 @@ pub fn run_matrix(
         let result = run_single_scenario(kubectl, config, scenario, skip_scaling);
         results.push(result);
 
-        // Inter-scenario cleanup (skip after last)
+        // Inter-scenario cleanup via Phase 1 RESET (skip after last)
         if i < scenarios.len() - 1 {
             output::print_inter_scenario_cleanup();
 
-            // Scale burst deployment to 0
-            output::print_action("Scaling deployment to 0...");
-            let _ = kubectl.run(&[
-                "-n", &config.namespace, "scale", "deployment",
-                &config.deployment, "--replicas=0",
-            ]);
-
-            // Wait for complete pod drain (verified 0 pods)
-            let app_label = config.resolved_pod_label();
-            if let Err(e) = drain::wait_for_zero_pods(kubectl, config, &app_label) {
-                output::print_warning(&format!("Inter-scenario drain failed: {e}"));
+            // Use Phase 1 (RESET) for inter-scenario cleanup
+            if let Err(e) = phases::run_phase_1_reset(kubectl, config) {
+                output::print_warning(&format!("Inter-scenario reset failed: {e}"));
             }
 
-            // [Gate 5] Drain Gate — verify 0 pods AND infrastructure recovery
-            // Use the current scenario's expected gateway/webhook counts
+            // [Gate 5] Drain Gate -- verify 0 pods AND infrastructure recovery
             let gate5 = gates::check_drain_gate(
                 kubectl,
                 config,
@@ -259,161 +202,75 @@ fn make_error_result(scenario: &crate::config::Scenario, error: String) -> Scena
         webhook_replicas: scenario.webhook_replicas,
         verify: None,
         burst: None,
+        phase_timings: None,
         error: Some(error),
     }
 }
 
-/// Run a single scenario and capture the result.
-#[allow(clippy::too_many_lines)]
+/// Run a single scenario through the three-phase lifecycle and capture the result.
 fn run_single_scenario(
     kubectl: &KubeCtl,
     config: &Config,
     scenario: &crate::config::Scenario,
     skip_scaling: bool,
 ) -> ScenarioResult {
-    // Scale infrastructure (unless skipping)
-    if !skip_scaling {
-        // Suspend HelmReleases so FluxCD doesn't revert our replica changes
-        output::print_action("Suspending HelmReleases (prevent FluxCD revert)...");
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.gateway_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":true}}"#,
-        ]);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.webhook_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":true}}"#,
-        ]);
-
-        // Patch the underlying Deployments directly (not HelmRelease values)
-        // This avoids the FluxCD reconciliation race entirely
-        output::print_action(&format!("Scaling gateway to {} replicas...", scenario.gateway_replicas));
-        if let Err(e) = kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.gateway_deployment,
-            &format!("--replicas={}", scenario.gateway_replicas),
-        ]) {
-            return make_error_result(scenario, format!("Failed to scale gateway: {e}"));
+    // Phase 1: RESET -- get to verified zero state
+    let reset_ms = match phases::run_phase_1_reset(kubectl, config) {
+        Ok(ms) => ms,
+        Err(e) => {
+            return make_error_result(scenario, format!("Phase 1 RESET failed: {e}"));
         }
+    };
 
-        output::print_action(&format!("Scaling webhook to {} replicas...", scenario.webhook_replicas));
-        if let Err(e) = kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.webhook_deployment,
-            &format!("--replicas={}", scenario.webhook_replicas),
-        ]) {
-            return make_error_result(scenario, format!("Failed to scale webhook: {e}"));
+    // Phase 2: WARMUP -- infrastructure ready
+    let warmup_timings = match phases::run_phase_2_warmup(kubectl, config, scenario, skip_scaling) {
+        Ok(t) => t,
+        Err(e) => {
+            return make_error_result(scenario, format!("Phase 2 WARMUP failed: {e}"));
         }
+    };
 
-        // Wait for rollout to complete — pods must be READY, not just created
-        let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
-        output::print_action("Waiting for gateway rollout...");
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "rollout", "status",
-            &gw_deploy_path,
-            &format!("--timeout={}s", config.rollout_wait_secs),
-        ]);
-        let wh_deploy_path = format!("deployment/{}", config.webhook_deployment);
-        output::print_action("Waiting for webhook rollout...");
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "rollout", "status",
-            &wh_deploy_path,
-            &format!("--timeout={}s", config.rollout_wait_secs),
-        ]);
-
-        // [Gate 3] Infrastructure Gate — readyReplicas == expected for both GW and WH
-        match gates::check_infrastructure_gate(
-            kubectl,
-            config,
-            scenario.gateway_replicas,
-            scenario.webhook_replicas,
-        ) {
-            Ok(gate3) => {
-                if let Err(e) = gates::enforce(&gate3, config.strict_gates) {
-                    return make_error_result(
-                        scenario,
-                        format!(
-                            "{e}. Infrastructure is not ready -- refusing to run burst with partial capacity."
-                        ),
-                    );
-                }
-            }
+    // Phase 3: EXECUTION -- burst bandwidth
+    let (burst_result, execution_ms) =
+        match phases::run_phase_3_execution(kubectl, config, scenario) {
+            Ok((b, ms)) => (b, ms),
             Err(e) => {
-                return make_error_result(
-                    scenario,
-                    format!("[Gate 3] kubectl error during infrastructure gate: {e}"),
-                );
+                return ScenarioResult {
+                    name: scenario.name.clone(),
+                    replicas: scenario.replicas,
+                    gateway_replicas: scenario.gateway_replicas,
+                    webhook_replicas: scenario.webhook_replicas,
+                    verify: None,
+                    burst: None,
+                    phase_timings: Some(PhaseTimings {
+                        reset_ms,
+                        warmup_ms: warmup_timings.total_ms,
+                        warmup_detail: warmup_timings,
+                        execution_ms: 0,
+                    }),
+                    error: Some(format!("Phase 3 EXECUTION failed: {e}")),
+                };
             }
-        }
-    }
+        };
 
-    // Verify infrastructure
-    let verify_result = match verify::verify_infra(kubectl, config) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            return ScenarioResult {
-                name: scenario.name.clone(),
-                replicas: scenario.replicas,
-                gateway_replicas: scenario.gateway_replicas,
-                webhook_replicas: scenario.webhook_replicas,
-                verify: None,
-                burst: None,
-                error: Some(format!("Verification failed: {e}")),
-            };
-        }
+    let timings = PhaseTimings {
+        reset_ms,
+        warmup_ms: warmup_timings.total_ms,
+        warmup_detail: warmup_timings,
+        execution_ms,
     };
 
-    // [Gate 4] Starting Line Gate — before burst
-    match gates::check_starting_line_gate(
-        kubectl,
-        config,
-        scenario.gateway_replicas,
-        scenario.webhook_replicas,
-    ) {
-        Ok(gate4) => {
-            if let Err(e) = gates::enforce(&gate4, config.strict_gates) {
-                return make_error_result(scenario, format!("{e}"));
-            }
-        }
-        Err(e) => {
-            return make_error_result(
-                scenario,
-                format!("[Gate 4] kubectl error during starting line gate: {e}"),
-            );
-        }
-    }
-
-    // Run burst with gateway/webhook expected counts for starting-line verification
-    let burst_result = match burst::run_burst(
-        kubectl,
-        config,
-        scenario.replicas,
-        1,
-        scenario.gateway_replicas,
-        scenario.webhook_replicas,
-    ) {
-        Ok(b) => Some(b),
-        Err(e) => {
-            return ScenarioResult {
-                name: scenario.name.clone(),
-                replicas: scenario.replicas,
-                gateway_replicas: scenario.gateway_replicas,
-                webhook_replicas: scenario.webhook_replicas,
-                verify: verify_result,
-                burst: None,
-                error: Some(format!("Burst failed: {e}")),
-            };
-        }
-    };
+    // Print full phase timing summary
+    phases::print_scenario_timings(&timings);
 
     ScenarioResult {
         name: scenario.name.clone(),
         replicas: scenario.replicas,
         gateway_replicas: scenario.gateway_replicas,
         webhook_replicas: scenario.webhook_replicas,
-        verify: verify_result,
-        burst: burst_result,
+        verify: None,
+        burst: Some(burst_result),
+        phase_timings: Some(timings),
         error: None,
     }
 }

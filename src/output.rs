@@ -703,3 +703,135 @@ pub fn print_matrix_summary(rows: &[SummaryRow]) {
 pub fn write_to(buf: &mut String, s: &str) {
     let _ = write!(buf, "{s}");
 }
+
+// ---------------------------------------------------------------------------
+// Phase timing output
+// ---------------------------------------------------------------------------
+
+/// Print a phase timing line (single phase).
+pub fn print_phase_timing(phase: &str, elapsed_ms: u64) {
+    let secs = elapsed_ms / 1000;
+    let label = format!("  {phase}");
+    let plain_len = strip_ansi_len(&label);
+    let dots_needed = if plain_len < DOT_LEADER_WIDTH { DOT_LEADER_WIDTH - plain_len } else { 3 };
+    let dots = dim(&".".repeat(dots_needed));
+    println!("{label} {dots} {}", bold(&format_duration(secs)));
+}
+
+/// Print the warmup sub-phase summary (Phase 2 breakdown).
+pub fn print_warmup_summary(timings: &crate::types::WarmupTimings) {
+    println!();
+    println!("  {}", bold("Phase 2: WARMUP"));
+    print_sub_phase_timing("2a. Nodes", timings.nodes_ms);
+    print_sub_phase_timing("2b. Images", timings.images_ms);
+    print_sub_phase_timing("2c. Gateway", timings.gateway_ms);
+    print_sub_phase_timing("2d. Webhook", timings.webhook_ms);
+    print_sub_phase_timing("2e. Gates", timings.gates_ms);
+    let total_secs = timings.total_ms / 1000;
+    println!(
+        "  {} {}",
+        bold("Total warmup:"),
+        bold(&format_duration(total_secs))
+    );
+    println!();
+}
+
+/// Print a single sub-phase timing line.
+fn print_sub_phase_timing(label: &str, elapsed_ms: u64) {
+    let secs = elapsed_ms / 1000;
+    let sub_label = format!("    {label}");
+    let plain_len = strip_ansi_len(&sub_label);
+    let dots_needed = if plain_len < DOT_LEADER_WIDTH { DOT_LEADER_WIDTH - plain_len } else { 3 };
+    let dots = dim(&".".repeat(dots_needed));
+    println!("{sub_label} {dots} {}", format_duration(secs));
+}
+
+/// Print the Phase 3 execution summary.
+pub fn print_execution_summary(
+    result: &crate::types::BurstResult,
+    elapsed_ms: u64,
+    gateway_replicas: u32,
+) {
+    println!();
+    println!("  {}", bold("Phase 3: EXECUTION"));
+
+    // Admission line
+    let admission_time = result.time_to_full_admission_ms
+        .map_or_else(|| "-".to_string(), |ms| format_ms(ms));
+    println!(
+        "    Admission: {}/{} in {} ({:.1} pods/sec)",
+        result.pods_injected,
+        result.replicas_requested,
+        admission_time,
+        result.admission_rate_pods_per_sec,
+    );
+
+    // Running line
+    let running_time = result.time_to_all_ready_ms
+        .map_or_else(
+            || format!("{}/{} at timeout", result.pods_running, result.replicas_requested),
+            |ms| format!(
+                "{}/{} in {}",
+                result.pods_running,
+                result.replicas_requested,
+                format_ms(ms),
+            ),
+        );
+    println!("    Running: {running_time}");
+
+    // Gateway throughput
+    if gateway_replicas > 0 {
+        println!(
+            "    Gateway throughput: {:.1} pods/sec/replica",
+            result.gateway_throughput_pods_per_sec
+                / f64::from(gateway_replicas.max(1)),
+        );
+    }
+
+    let total_secs = elapsed_ms / 1000;
+    println!("    Total execution: {}", bold(&format_duration(total_secs)));
+    println!();
+}
+
+/// Print the full phase timing breakdown at the end of a scenario.
+pub fn print_phase_breakdown(timings: &crate::types::PhaseTimings) {
+    let reset_secs = timings.reset_ms / 1000;
+    let warmup_secs = timings.warmup_ms / 1000;
+    let execution_secs = timings.execution_ms / 1000;
+    let total = timings.reset_ms + timings.warmup_ms + timings.execution_ms;
+    let total_secs = total / 1000;
+
+    // Phase 1
+    let label = "  Phase 1: RESET";
+    let plain_len = strip_ansi_len(label);
+    let dots_needed = if plain_len < DOT_LEADER_WIDTH { DOT_LEADER_WIDTH - plain_len } else { 3 };
+    println!("{label} {} {}", dim(&".".repeat(dots_needed)), format_duration(reset_secs));
+
+    // Phase 2
+    let label = "  Phase 2: WARMUP";
+    let plain_len = strip_ansi_len(label);
+    let dots_needed = if plain_len < DOT_LEADER_WIDTH { DOT_LEADER_WIDTH - plain_len } else { 3 };
+    println!("{label} {} {}", dim(&".".repeat(dots_needed)), format_duration(warmup_secs));
+
+    // Sub-phases
+    let detail = &timings.warmup_detail;
+    print_sub_phase_timing("2a. Nodes", detail.nodes_ms);
+    print_sub_phase_timing("2b. Images", detail.images_ms);
+    print_sub_phase_timing("2c. Gateway", detail.gateway_ms);
+    print_sub_phase_timing("2d. Webhook", detail.webhook_ms);
+    print_sub_phase_timing("2e. Gates", detail.gates_ms);
+
+    // Phase 3
+    let label = "  Phase 3: EXECUTION";
+    let plain_len = strip_ansi_len(label);
+    let dots_needed = if plain_len < DOT_LEADER_WIDTH { DOT_LEADER_WIDTH - plain_len } else { 3 };
+    println!("{label} {} {}", dim(&".".repeat(dots_needed)), format_duration(execution_secs));
+
+    // Total
+    println!();
+    println!(
+        "  {} {}",
+        bold("Total scenario time:"),
+        bold(&format_duration(total_secs))
+    );
+}

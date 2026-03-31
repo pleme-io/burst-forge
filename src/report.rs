@@ -73,6 +73,91 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
 
     html.push_str("</tbody></table>");
 
+    // Phase Timings
+    html.push_str("<h2>Phase Timings</h2>");
+    html.push_str(
+        "<table><thead><tr>\
+         <th>Scenario</th>\
+         <th>Phase 1: RESET</th>\
+         <th>Phase 2: WARMUP</th>\
+         <th>2a. Nodes</th>\
+         <th>2b. Images</th>\
+         <th>2c. Gateway</th>\
+         <th>2d. Webhook</th>\
+         <th>2e. Gates</th>\
+         <th>Phase 3: EXECUTION</th>\
+         </tr></thead><tbody>",
+    );
+
+    for s in &report.scenarios {
+        if let Some(t) = &s.phase_timings {
+            let _ = write!(
+                html,
+                "<tr><td>{}</td><td>{:.1}s</td><td>{:.1}s</td>\
+                 <td>{:.1}s</td><td>{:.1}s</td><td>{:.1}s</td>\
+                 <td>{:.1}s</td><td>{:.1}s</td><td>{:.1}s</td></tr>",
+                s.name,
+                t.reset_ms as f64 / 1000.0,
+                t.warmup_ms as f64 / 1000.0,
+                t.warmup_detail.nodes_ms as f64 / 1000.0,
+                t.warmup_detail.images_ms as f64 / 1000.0,
+                t.warmup_detail.gateway_ms as f64 / 1000.0,
+                t.warmup_detail.webhook_ms as f64 / 1000.0,
+                t.warmup_detail.gates_ms as f64 / 1000.0,
+                t.execution_ms as f64 / 1000.0,
+            );
+        } else {
+            let _ = write!(
+                html,
+                "<tr><td>{}</td><td>-</td><td>-</td><td>-</td><td>-</td>\
+                 <td>-</td><td>-</td><td>-</td><td>-</td></tr>",
+                s.name
+            );
+        }
+    }
+
+    html.push_str("</tbody></table>");
+
+    // Execution Metrics
+    html.push_str("<h2>Execution Metrics</h2>");
+    html.push_str(
+        "<table><thead><tr>\
+         <th>Scenario</th>\
+         <th>Admission Rate (pods/sec)</th>\
+         <th>Gateway Throughput (pods/sec)</th>\
+         <th>Time to 50% Running</th>\
+         <th>Time to Full Admission</th>\
+         </tr></thead><tbody>",
+    );
+
+    for s in &report.scenarios {
+        if let Some(b) = &s.burst {
+            let t50 = b.time_to_50pct_running_ms.map_or_else(
+                || "-".to_string(),
+                |ms| format!("{:.1}s", ms as f64 / 1000.0),
+            );
+            let tadm = b.time_to_full_admission_ms.map_or_else(
+                || "-".to_string(),
+                |ms| format!("{:.1}s", ms as f64 / 1000.0),
+            );
+            let _ = write!(
+                html,
+                "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{t50}</td><td>{tadm}</td></tr>",
+                s.name,
+                b.admission_rate_pods_per_sec,
+                b.gateway_throughput_pods_per_sec,
+            );
+        } else {
+            let _ = write!(
+                html,
+                "<tr><td>{}</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>",
+                s.name
+            );
+        }
+    }
+
+    html.push_str("</tbody></table>");
+
     // Infrastructure details
     html.push_str("<h2>Infrastructure</h2>");
     html.push_str("<table><thead><tr>\
