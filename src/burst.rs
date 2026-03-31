@@ -155,7 +155,10 @@ pub fn run_burst(
             });
         }
 
-        if running > 0 && pending == 0 && failed == 0 && running < replicas {
+        // Only declare capacity limit when ALL expected pods exist (no more being created)
+        // AND none are pending. Otherwise the deployment controller is still creating pods.
+        let total_pods = running + pending + failed;
+        if running > 0 && pending == 0 && failed == 0 && running < replicas && total_pods >= replicas {
             output::print_capacity_limit(running, replicas);
             break;
         }
