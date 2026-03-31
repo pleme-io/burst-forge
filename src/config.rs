@@ -102,7 +102,7 @@ pub struct Config {
 /// Confluence reporting configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfluenceConfig {
-    /// Confluence base URL (e.g. "akeyless.atlassian.net")
+    /// Confluence base URL (e.g. "myorg.atlassian.net")
     pub base_url: String,
     /// Space key for reports
     pub space_key: String,
@@ -110,6 +110,16 @@ pub struct ConfluenceConfig {
     pub parent_page_id: String,
     /// User email for Basic auth
     pub user_email: String,
+    /// Path to API token file (default: ~/.config/atlassian/api-token)
+    /// Also checks CONFLUENCE_API_TOKEN env var first.
+    #[serde(default = "default_token_path")]
+    pub token_path: String,
+}
+
+fn default_token_path() -> String {
+    dirs::config_dir()
+        .map(|d| d.join("atlassian").join("api-token").to_string_lossy().to_string())
+        .unwrap_or_else(|| "~/.config/atlassian/api-token".to_string())
 }
 
 /// How burst-forge detects successful Akeyless secret injection.

@@ -137,11 +137,13 @@ pub fn publish_to_confluence(
     title: &str,
     content: &str,
 ) -> anyhow::Result<String> {
-    // Token discovery: env var → ~/.config/atlassian/api-token (shikumi convention)
+    // Token discovery: env var → configured token_path
     let token = std::env::var("CONFLUENCE_API_TOKEN").ok().or_else(|| {
-        let path = dirs::config_dir()?.join("atlassian").join("api-token");
-        std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-    }).context("Confluence API token not found. Set CONFLUENCE_API_TOKEN env var or ensure ~/.config/atlassian/api-token exists (deployed by blackmatter)")?;
+        std::fs::read_to_string(&conf.token_path).ok().map(|s| s.trim().to_string())
+    }).with_context(|| format!(
+        "Confluence API token not found. Set CONFLUENCE_API_TOKEN env var or ensure {} exists",
+        conf.token_path
+    ))?;
 
     // Build Basic auth header: base64(email:token)
     let credentials = format!("{}:{token}", conf.user_email);
