@@ -183,6 +183,7 @@ pub fn get_deployment_replicas(
 /// # Errors
 ///
 /// Returns an error if either deployment is not fully ready.
+#[allow(dead_code)]
 pub fn verify_gateway_health(
     kubectl: &KubeCtl,
     config: &Config,

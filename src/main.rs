@@ -8,6 +8,7 @@ mod burst;
 mod config;
 mod drain;
 mod flux;
+mod gates;
 mod kubectl;
 mod matrix;
 mod nodes;

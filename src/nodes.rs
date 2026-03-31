@@ -62,10 +62,11 @@ pub fn scale_node_group(config: &NodeGroupConfig, desired: u32) -> anyhow::Resul
     Ok(())
 }
 
-/// Wait until the desired number of nodes are in Ready state.
+/// Wait until the desired number of nodes are Ready AND schedulable.
 ///
 /// Polls `kubectl get nodes` at the given interval until the desired count
-/// of Ready nodes is reached or the timeout expires.
+/// of Ready+Schedulable nodes is reached or the timeout expires.
+/// Nodes with `SchedulingDisabled` (draining) are not counted.
 ///
 /// # Errors
 ///
@@ -76,26 +77,26 @@ pub fn wait_for_nodes(
     timeout: Duration,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
-    println!("  Waiting for {desired} nodes to be Ready (timeout: {}s, poll: {}s)...",
+    println!("  Waiting for {desired} nodes to be Ready+Schedulable (timeout: {}s, poll: {}s)...",
         timeout.as_secs(), poll_interval.as_secs());
 
     let start = Instant::now();
 
     loop {
         if start.elapsed() > timeout {
-            let ready = count_ready_nodes(kubectl).unwrap_or(0);
+            let ready = count_ready_schedulable_nodes(kubectl).unwrap_or(0);
             anyhow::bail!(
-                "Timeout waiting for {desired} Ready nodes after {}s (currently {ready} ready)",
+                "Timeout waiting for {desired} Ready+Schedulable nodes after {}s (currently {ready} ready+schedulable)",
                 timeout.as_secs()
             );
         }
 
-        let ready = count_ready_nodes(kubectl)?;
+        let ready = count_ready_schedulable_nodes(kubectl)?;
         let elapsed = start.elapsed().as_secs();
-        println!("  [{elapsed:>4}s] Ready nodes: {ready}/{desired}");
+        println!("  [{elapsed:>4}s] Ready+Schedulable nodes: {ready}/{desired}");
 
         if ready >= desired {
-            println!("  All {desired} nodes are Ready");
+            println!("  [Gate 1] Nodes: {ready}/{desired} Ready+Schedulable");
             return Ok(());
         }
 
@@ -139,15 +140,32 @@ pub fn tag_nodes(kubectl: &KubeCtl, label: &str) -> anyhow::Result<()> {
 
 /// Get the current number of Ready nodes in the cluster.
 ///
+/// Excludes nodes that are `NotReady` or have `SchedulingDisabled` (draining).
+///
 /// # Errors
 ///
 /// Returns an error if the kubectl command fails.
 pub fn count_ready_nodes(kubectl: &KubeCtl) -> anyhow::Result<u32> {
+    count_ready_schedulable_nodes(kubectl)
+}
+
+/// Get the current number of Ready AND schedulable nodes.
+///
+/// A node showing `Ready,SchedulingDisabled` is draining and is excluded.
+///
+/// # Errors
+///
+/// Returns an error if the kubectl command fails.
+pub fn count_ready_schedulable_nodes(kubectl: &KubeCtl) -> anyhow::Result<u32> {
     let output = kubectl.run(&["get", "nodes", "--no-headers"])?;
     #[allow(clippy::cast_possible_truncation)]
     let ready = output
         .lines()
-        .filter(|line| line.contains("Ready") && !line.contains("NotReady"))
+        .filter(|line| {
+            line.contains("Ready")
+                && !line.contains("NotReady")
+                && !line.contains("SchedulingDisabled")
+        })
         .count() as u32;
     Ok(ready)
 }
@@ -204,19 +222,24 @@ pub fn get_node_group_status(
 
 /// Wait for an image-warmup `DaemonSet` to be fully rolled out.
 ///
-/// Polls until all desired pods in the `DaemonSet` are ready, ensuring
-/// images are pre-pulled on every node.
+/// Matches the DaemonSet ready count against the number of Ready+schedulable
+/// nodes. Polls until all desired pods are ready on every schedulable node.
 ///
 /// # Errors
 ///
 /// Returns an error if the timeout expires or kubectl fails.
+#[allow(dead_code)]
 pub fn wait_for_daemonset_ready(
     kubectl: &KubeCtl,
     namespace: &str,
     name: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    println!("  Waiting for DaemonSet {namespace}/{name} rollout (timeout: {}s)...", timeout.as_secs());
+    let schedulable = count_ready_schedulable_nodes(kubectl)?;
+    println!(
+        "  Waiting for DaemonSet {namespace}/{name} rollout on {schedulable} schedulable nodes (timeout: {}s)...",
+        timeout.as_secs()
+    );
 
     let start = Instant::now();
     let poll_interval = Duration::from_secs(15);
@@ -244,10 +267,18 @@ pub fn wait_for_daemonset_ready(
                     .unwrap_or(0);
                 let ready = json["status"]["numberReady"].as_u64().unwrap_or(0);
                 let elapsed = start.elapsed().as_secs();
-                println!("  [{elapsed:>4}s] DaemonSet {name}: {ready}/{desired} ready");
+                println!(
+                    "  [{elapsed:>4}s] DaemonSet {name}: {ready}/{desired} ready, {schedulable} schedulable nodes"
+                );
 
-                if desired > 0 && ready >= desired {
-                    println!("  DaemonSet {name} fully rolled out");
+                #[allow(clippy::cast_possible_truncation)]
+                if ready >= u64::from(schedulable)
+                    && desired >= u64::from(schedulable)
+                    && schedulable > 0
+                {
+                    println!(
+                        "  [Gate 2] Warmup: {ready}/{desired} pods on {schedulable} schedulable nodes"
+                    );
                     return Ok(());
                 }
             }

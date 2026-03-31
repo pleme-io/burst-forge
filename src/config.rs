@@ -181,6 +181,13 @@ pub struct Config {
     #[serde(default)]
     pub confluence: Option<ConfluenceConfig>,
 
+    /// Whether to require all gates to pass (default: true).
+    ///
+    /// When true, any gate failure aborts the scenario immediately.
+    /// When false, gate failures are logged as warnings but execution continues.
+    #[serde(default = "default_true")]
+    pub strict_gates: bool,
+
     /// Backward-compatible fields — migrated to structured configs above.
     /// Prefer `image_cache.registry` over this field.
     #[serde(default)]
@@ -280,6 +287,7 @@ pub enum InjectionMode {
     Env,
 }
 
+fn default_true() -> bool { true }
 fn default_namespace() -> String { "scale-test".to_string() }
 fn default_deployment() -> String { "nginx-burst".to_string() }
 fn default_timeout() -> u64 { 600 }

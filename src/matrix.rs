@@ -7,6 +7,7 @@ use chrono::Utc;
 use crate::burst;
 use crate::config::Config;
 use crate::drain;
+use crate::gates;
 use crate::kubectl::KubeCtl;
 use crate::nodes;
 use crate::types::{MatrixReport, ScenarioResult};
@@ -69,31 +70,27 @@ pub fn run_matrix(
         nodes::scale_node_group(ng, max_nodes_needed)
             .map_err(|e| anyhow::anyhow!("FATAL: Failed to scale node group to {max_nodes_needed}: {e}"))?;
 
-        nodes::wait_for_nodes(
+        // [Gate 1] Node Ready Gate — wait for Ready+Schedulable nodes
+        let gate1 = gates::wait_for_ready_schedulable_nodes(
             kubectl,
             max_nodes_needed,
             Duration::from_secs(config.timeout_secs),
             Duration::from_secs(config.node_poll_interval_secs),
-        )
-        .map_err(|e| anyhow::anyhow!("FATAL: Nodes did not become ready: {e}"))?;
+        )?;
+        gates::enforce(&gate1, config.strict_gates)?;
 
         nodes::tag_nodes(kubectl, "burst-forge=true")?;
 
-        // Wait for warmup DaemonSet if configured — failure is fatal
+        // [Gate 2] Warmup Gate — DaemonSet matches schedulable node count
         if let Some(warmup) = &config.warmup_daemonset {
             println!("\n=== Waiting for warmup DaemonSet {}/{}  ===\n", warmup.namespace, warmup.name);
-            nodes::wait_for_daemonset_ready(
+            let gate2 = gates::check_warmup_gate(
                 kubectl,
                 &warmup.namespace,
                 &warmup.name,
                 Duration::from_secs(warmup.timeout_secs),
-            )
-            .map_err(|e| anyhow::anyhow!(
-                "FATAL: Warmup DaemonSet {}/{} did not become ready within {}s: {e}",
-                warmup.namespace,
-                warmup.name,
-                warmup.timeout_secs,
-            ))?;
+            )?;
+            gates::enforce(&gate2, config.strict_gates)?;
         }
     }
 
@@ -133,31 +130,15 @@ pub fn run_matrix(
                 eprintln!("  WARNING: Inter-scenario drain failed: {e}");
             }
 
-            // Verify gateway/webhook are not overloaded after the burst
-            match drain::get_deployment_replicas(
+            // [Gate 5] Drain Gate — verify 0 pods AND infrastructure recovery
+            // Use the current scenario's expected gateway/webhook counts
+            let gate5 = gates::check_drain_gate(
                 kubectl,
-                &config.injection_namespace,
-                &config.gateway_deployment,
-            ) {
-                Ok((gw_ready, gw_desired)) => {
-                    println!("  Gateway health: {gw_ready}/{gw_desired} ready");
-                }
-                Err(e) => {
-                    eprintln!("  WARNING: Could not check gateway health: {e}");
-                }
-            }
-            match drain::get_deployment_replicas(
-                kubectl,
-                &config.injection_namespace,
-                &config.webhook_deployment,
-            ) {
-                Ok((wh_ready, wh_desired)) => {
-                    println!("  Webhook health: {wh_ready}/{wh_desired} ready");
-                }
-                Err(e) => {
-                    eprintln!("  WARNING: Could not check webhook health: {e}");
-                }
-            }
+                config,
+                scenario.gateway_replicas,
+                scenario.webhook_replicas,
+            )?;
+            gates::enforce(&gate5, config.strict_gates)?;
 
             // Cooldown AFTER drain completes (not during)
             println!(
@@ -165,13 +146,6 @@ pub fn run_matrix(
                 config.cooldown_secs
             );
             std::thread::sleep(std::time::Duration::from_secs(config.cooldown_secs));
-
-            // Print state verification
-            let remaining = drain::count_pods(kubectl, &config.namespace, &app_label)
-                .unwrap_or(u32::MAX);
-            println!(
-                "  State verified: {remaining} pods, ready for next scenario"
-            );
         }
     }
 
@@ -332,21 +306,27 @@ fn run_single_scenario(
             &format!("--timeout={}s", config.rollout_wait_secs),
         ]);
 
-        // Verify readyReplicas == desiredReplicas (not just rollout done)
-        match drain::verify_gateway_health(
+        // [Gate 3] Infrastructure Gate — readyReplicas == expected for both GW and WH
+        match gates::check_infrastructure_gate(
             kubectl,
             config,
             scenario.gateway_replicas,
             scenario.webhook_replicas,
         ) {
-            Ok(()) => {}
+            Ok(gate3) => {
+                if let Err(e) = gates::enforce(&gate3, config.strict_gates) {
+                    return make_error_result(
+                        scenario,
+                        format!(
+                            "{e}. Infrastructure is not ready -- refusing to run burst with partial capacity."
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 return make_error_result(
                     scenario,
-                    format!(
-                        "Gateway health verification failed after rollout: {e}. \
-                         Infrastructure is not ready -- refusing to run burst with partial capacity."
-                    ),
+                    format!("[Gate 3] kubectl error during infrastructure gate: {e}"),
                 );
             }
         }
@@ -367,6 +347,26 @@ fn run_single_scenario(
             };
         }
     };
+
+    // [Gate 4] Starting Line Gate — before burst
+    match gates::check_starting_line_gate(
+        kubectl,
+        config,
+        scenario.gateway_replicas,
+        scenario.webhook_replicas,
+    ) {
+        Ok(gate4) => {
+            if let Err(e) = gates::enforce(&gate4, config.strict_gates) {
+                return make_error_result(scenario, format!("{e}"));
+            }
+        }
+        Err(e) => {
+            return make_error_result(
+                scenario,
+                format!("[Gate 4] kubectl error during starting line gate: {e}"),
+            );
+        }
+    }
 
     // Run burst with gateway/webhook expected counts for starting-line verification
     let burst_result = match burst::run_burst(
