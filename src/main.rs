@@ -105,7 +105,32 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let cfg = config::discover(cli.config.as_deref())?;
-    let kubectl = KubeCtl::new(cli.kubeconfig);
+    let kubectl = KubeCtl::new(cli.kubeconfig.clone());
+
+    // Signal handler: graceful cleanup on Ctrl+C
+    // Scales deployment to 0 and node group to 0 before exiting
+    let cleanup_cfg = cfg.clone();
+    let cleanup_kubeconfig = cli.kubeconfig.clone();
+    ctrlc::set_handler(move || {
+        eprintln!("\n\nSIGINT received — running cleanup...");
+        let kctl = KubeCtl::new(cleanup_kubeconfig.clone());
+
+        // Reset deployment to 0
+        let _ = kctl.run(&[
+            "-n", &cleanup_cfg.namespace,
+            "scale", "deployment", &cleanup_cfg.deployment, "--replicas=0",
+        ]);
+        eprintln!("  Deployment scaled to 0");
+
+        // Scale node group to 0
+        if let Some(ng) = &cleanup_cfg.node_group {
+            let _ = nodes::scale_node_group(ng, 0);
+            eprintln!("  Node group scaling to 0");
+        }
+
+        eprintln!("  Cleanup complete — exiting");
+        std::process::exit(130);
+    }).expect("failed to set Ctrl+C handler");
 
     match cli.command {
         Commands::Verify => {

@@ -25,6 +25,19 @@ pub fn run_burst(
 
     println!("\n=== Burst #{iteration}: 0 -> {replicas} replicas ===\n");
 
+    // Patch maxSurge to match replica count — all pods created simultaneously
+    // for maximum concurrent pressure on gateway/webhook
+    println!("  Patching maxSurge={replicas} for simultaneous pod creation...");
+    kubectl.run(&[
+        "-n",
+        &config.namespace,
+        "patch",
+        "deployment",
+        &config.deployment,
+        "--type=merge",
+        &format!("-p={{\"spec\":{{\"strategy\":{{\"rollingUpdate\":{{\"maxSurge\":{replicas}}}}}}}}}"),
+    ])?;
+
     // Scale to 0 first (clean state)
     println!("  Resetting to 0...");
     kubectl.run(&[

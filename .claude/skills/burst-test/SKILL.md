@@ -38,10 +38,26 @@ Before running burst tests, verify:
 
 ## Running Burst Tests
 
+Config lives in the project repo, symlinked for shikumi discovery:
+```
+pleme-io/akeyless-k8s/test/scale-test/burst-forge.yaml  (source of truth)
+~/.config/burst-forge/burst-forge.yaml                    (symlink)
+```
+
 ### Full Scaling Matrix (recommended)
 ```bash
+# From akeyless-k8s project directory:
+burst-forge matrix --config test/scale-test/burst-forge.yaml --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Or via shikumi discovery (if symlinked):
 burst-forge matrix --kubeconfig /tmp/eks-scale-test.kubeconfig
 ```
+
+### ASM-17583 Scalability Validation
+The scenarios match the ASM-17540 table (Cerebras). Run largest first, descending — maximum pressure on gateway/webhook first, then validate lower tiers.
+
+### Signal Handling
+Ctrl+C triggers graceful cleanup: deployment scaled to 0, node group scaled to 0. No orphaned resources.
 
 This automatically:
 1. Calculates nodes needed from largest scenario
@@ -134,18 +150,23 @@ Two modes based on how Akeyless injects secrets:
 
 Set `injection_mode` in config or `--injection-mode` on CLI.
 
-## Scaling Matrix (historical data)
+## Scaling Matrix (ASM-17540)
 
-| Pods | Gateway | Webhook | Nodes (m5.xlarge) |
-|------|---------|---------|-------------------|
-| 50 | 1 | 1 | 1-2 |
-| 150 | 1 | 2 | 3-4 |
-| 300 | 2 | 3 | 6-7 |
-| 500 | 3 | 4 | 10-11 |
-| 750 | 5 | 5 | 14-15 |
-| 1000 | 6 | 7 | 18-19 |
+From the Jira ticket — Cerebras scalability validation:
 
-Formula: Gateway replicas = pods / 90 with 40% headroom.
+| Range | GW | Injectors | Webhook | Status |
+|-------|-----|-----------|---------|--------|
+| ≤50 | 1 | 1 | 1 | Not yet tested |
+| 51-150 | 1 | 2 | 2 | Partial — failed at 2 GW + 2 injector |
+| 151-300 | 2 | 4 | 3-4 | 4 GW resolved 150-pod burst |
+| 301-500 | 3 | 5-6 | 4 | 6 GW + 4 injector handled 500 |
+| 501-750 | 4 | 7 | 5 | Not tested |
+| 751-1000 | 5-6 | 9 | 6-7 | Not tested |
+
+Scenarios run largest first (1000 → 50) for maximum pressure first.
+
+### maxSurge
+burst-forge patches `maxSurge` to match the scenario's replica count before each burst, ensuring all pods are created simultaneously for maximum concurrent pressure on the gateway/webhook.
 
 ## Nix Integration
 
