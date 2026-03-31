@@ -6,6 +6,7 @@ use chrono::Utc;
 
 use crate::burst;
 use crate::config::Config;
+use crate::drain;
 use crate::kubectl::KubeCtl;
 use crate::nodes;
 use crate::types::{MatrixReport, ScenarioResult};
@@ -115,10 +116,62 @@ pub fn run_matrix(
         let result = run_single_scenario(kubectl, config, scenario, skip_scaling);
         results.push(result);
 
-        // Cool down between scenarios (skip after last)
+        // Inter-scenario cleanup (skip after last)
         if i < scenarios.len() - 1 {
-            println!("\n  Cooling down {}s...", config.cooldown_secs);
+            println!("\n  === Inter-scenario cleanup ===");
+
+            // Scale burst deployment to 0
+            println!("  Scaling deployment to 0...");
+            let _ = kubectl.run(&[
+                "-n", &config.namespace, "scale", "deployment",
+                &config.deployment, "--replicas=0",
+            ]);
+
+            // Wait for complete pod drain (verified 0 pods)
+            let app_label = config.resolved_pod_label();
+            if let Err(e) = drain::wait_for_zero_pods(kubectl, config, &app_label) {
+                eprintln!("  WARNING: Inter-scenario drain failed: {e}");
+            }
+
+            // Verify gateway/webhook are not overloaded after the burst
+            match drain::get_deployment_replicas(
+                kubectl,
+                &config.injection_namespace,
+                &config.gateway_deployment,
+            ) {
+                Ok((gw_ready, gw_desired)) => {
+                    println!("  Gateway health: {gw_ready}/{gw_desired} ready");
+                }
+                Err(e) => {
+                    eprintln!("  WARNING: Could not check gateway health: {e}");
+                }
+            }
+            match drain::get_deployment_replicas(
+                kubectl,
+                &config.injection_namespace,
+                &config.webhook_deployment,
+            ) {
+                Ok((wh_ready, wh_desired)) => {
+                    println!("  Webhook health: {wh_ready}/{wh_desired} ready");
+                }
+                Err(e) => {
+                    eprintln!("  WARNING: Could not check webhook health: {e}");
+                }
+            }
+
+            // Cooldown AFTER drain completes (not during)
+            println!(
+                "  Drain complete -- cooling down {}s before next scenario...",
+                config.cooldown_secs
+            );
             std::thread::sleep(std::time::Duration::from_secs(config.cooldown_secs));
+
+            // Print state verification
+            let remaining = drain::count_pods(kubectl, &config.namespace, &app_label)
+                .unwrap_or(u32::MAX);
+            println!(
+                "  State verified: {remaining} pods, ready for next scenario"
+            );
         }
     }
 
@@ -279,19 +332,24 @@ fn run_single_scenario(
             &format!("--timeout={}s", config.rollout_wait_secs),
         ]);
 
-        // Verify actual replica counts
-        let gw_ready = kubectl.run(&[
-            "-n", &config.injection_namespace, "get", "deployment",
-            &config.gateway_deployment,
-            "-o", "jsonpath={.status.readyReplicas}",
-        ]).unwrap_or_default();
-        let wh_ready = kubectl.run(&[
-            "-n", &config.injection_namespace, "get", "deployment",
-            &config.webhook_deployment,
-            "-o", "jsonpath={.status.readyReplicas}",
-        ]).unwrap_or_default();
-        println!("  Gateway ready: {gw_ready}/{}, Webhook ready: {wh_ready}/{}",
-            scenario.gateway_replicas, scenario.webhook_replicas);
+        // Verify readyReplicas == desiredReplicas (not just rollout done)
+        match drain::verify_gateway_health(
+            kubectl,
+            config,
+            scenario.gateway_replicas,
+            scenario.webhook_replicas,
+        ) {
+            Ok(()) => {}
+            Err(e) => {
+                return make_error_result(
+                    scenario,
+                    format!(
+                        "Gateway health verification failed after rollout: {e}. \
+                         Infrastructure is not ready -- refusing to run burst with partial capacity."
+                    ),
+                );
+            }
+        }
     }
 
     // Verify infrastructure
@@ -310,8 +368,15 @@ fn run_single_scenario(
         }
     };
 
-    // Run burst
-    let burst_result = match burst::run_burst(kubectl, config, scenario.replicas, 1) {
+    // Run burst with gateway/webhook expected counts for starting-line verification
+    let burst_result = match burst::run_burst(
+        kubectl,
+        config,
+        scenario.replicas,
+        1,
+        scenario.gateway_replicas,
+        scenario.webhook_replicas,
+    ) {
         Ok(b) => Some(b),
         Err(e) => {
             return ScenarioResult {

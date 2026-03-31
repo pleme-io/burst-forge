@@ -6,6 +6,7 @@
 
 mod burst;
 mod config;
+mod drain;
 mod flux;
 mod kubectl;
 mod matrix;
@@ -108,19 +109,40 @@ fn main() -> anyhow::Result<()> {
     let kubectl = KubeCtl::new(cli.kubeconfig.clone());
 
     // Signal handler: graceful cleanup on Ctrl+C
-    // Scales deployment to 0 and node group to 0 before exiting
+    // Force-deletes burst pods, waits briefly for drain, then scales nodes to 0
     let cleanup_cfg = cfg.clone();
     let cleanup_kubeconfig = cli.kubeconfig.clone();
     ctrlc::set_handler(move || {
         eprintln!("\n\nSIGINT received — running cleanup...");
         let kctl = KubeCtl::new(cleanup_kubeconfig.clone());
+        let app_label = cleanup_cfg.resolved_pod_label();
 
-        // Reset deployment to 0
+        // Scale deployment to 0
         let _ = kctl.run(&[
             "-n", &cleanup_cfg.namespace,
             "scale", "deployment", &cleanup_cfg.deployment, "--replicas=0",
         ]);
         eprintln!("  Deployment scaled to 0");
+
+        // Force delete all burst pods (--grace-period=0)
+        eprintln!("  Force deleting burst pods...");
+        let _ = kctl.run(&[
+            "-n", &cleanup_cfg.namespace,
+            "delete", "pods", "-l", &app_label,
+            "--grace-period=0", "--force",
+        ]);
+
+        // Brief wait for drain to take effect
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        // Verify pod count
+        let remaining = drain::count_pods(&kctl, &cleanup_cfg.namespace, &app_label)
+            .unwrap_or(u32::MAX);
+        if remaining == 0 {
+            eprintln!("  All burst pods terminated");
+        } else {
+            eprintln!("  WARNING: {remaining} pods may still be terminating");
+        }
 
         // Scale node group to 0
         if let Some(ng) = &cleanup_cfg.node_group {
@@ -158,9 +180,23 @@ fn main() -> anyhow::Result<()> {
 
             verify::verify_infra(&kubectl, &cfg)?;
 
+            // Detect current gateway/webhook replica counts for starting-line verification
+            let (gw_ready, _) = drain::get_deployment_replicas(
+                &kubectl,
+                &cfg.injection_namespace,
+                &cfg.gateway_deployment,
+            ).unwrap_or((1, 1));
+            let (wh_ready, _) = drain::get_deployment_replicas(
+                &kubectl,
+                &cfg.injection_namespace,
+                &cfg.webhook_deployment,
+            ).unwrap_or((1, 1));
+
             let mut results = Vec::new();
             for i in 1..=iterations {
-                let result = burst::run_burst(&kubectl, &cfg, target_replicas, i)?;
+                let result = burst::run_burst(
+                    &kubectl, &cfg, target_replicas, i, gw_ready, wh_ready,
+                )?;
 
                 println!("\n--- Iteration {i} Results ---");
                 println!(
@@ -176,7 +212,10 @@ fn main() -> anyhow::Result<()> {
                 results.push(result);
 
                 if i < iterations {
-                    println!("\n  Cooling down {}s...", cfg.cooldown_secs);
+                    // Drain between iterations
+                    println!("\n  Draining pods before next iteration...");
+                    drain::drain_pods(&kubectl, &cfg)?;
+                    println!("  Cooling down {}s...", cfg.cooldown_secs);
                     std::thread::sleep(std::time::Duration::from_secs(cfg.cooldown_secs));
                 }
             }

@@ -99,13 +99,21 @@ pub struct Config {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
 
-    /// Cooldown seconds between scenarios in the matrix.
+    /// Cooldown seconds between scenarios in the matrix (applied AFTER drain completes).
     #[serde(default = "default_cooldown")]
     pub cooldown_secs: u64,
 
     /// Seconds to wait for `HelmRelease` rollout after patching replicas.
     #[serde(default = "default_rollout_wait")]
     pub rollout_wait_secs: u64,
+
+    /// Maximum seconds to wait for pods to terminate during drain.
+    #[serde(default = "default_drain_timeout")]
+    pub drain_timeout_secs: u64,
+
+    /// How often (seconds) to poll pod count during drain.
+    #[serde(default = "default_drain_poll_interval")]
+    pub drain_poll_interval_secs: u64,
 
     /// Node readiness poll interval in seconds.
     #[serde(default = "default_node_poll_interval")]
@@ -276,8 +284,10 @@ fn default_namespace() -> String { "scale-test".to_string() }
 fn default_deployment() -> String { "nginx-burst".to_string() }
 fn default_timeout() -> u64 { 600 }
 fn default_poll_interval() -> u64 { 5 }
-fn default_cooldown() -> u64 { 10 }
-fn default_rollout_wait() -> u64 { 30 }
+fn default_cooldown() -> u64 { 15 }
+fn default_rollout_wait() -> u64 { 120 }
+fn default_drain_timeout() -> u64 { 120 }
+fn default_drain_poll_interval() -> u64 { 5 }
 fn default_node_poll_interval() -> u64 { 15 }
 fn default_replicas() -> u32 { 50 }
 fn default_one() -> u32 { 1 }

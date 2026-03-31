@@ -5,10 +5,15 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 
 use crate::config::Config;
+use crate::drain;
 use crate::kubectl::KubeCtl;
 use crate::types::BurstResult;
 
-/// Run a single burst test: scale to 0, then scale to N, poll until done.
+/// Run a single burst test: drain to 0 (verified), then scale to N, poll until done.
+///
+/// The drain phase polls `kubectl get pods` until truly 0 pods exist,
+/// rather than trusting `kubectl scale` alone. If drain times out,
+/// force-deletes remaining pods before proceeding.
 ///
 /// # Errors
 ///
@@ -19,6 +24,8 @@ pub fn run_burst(
     config: &Config,
     replicas: u32,
     iteration: u32,
+    expected_gw: u32,
+    expected_wh: u32,
 ) -> anyhow::Result<BurstResult> {
     let start = Instant::now();
     let timestamp = Utc::now().to_rfc3339();
@@ -38,19 +45,13 @@ pub fn run_burst(
         &format!("-p={{\"spec\":{{\"strategy\":{{\"rollingUpdate\":{{\"maxSurge\":{replicas}}}}}}}}}"),
     ])?;
 
-    // Scale to 0 first (clean state)
-    println!("  Resetting to 0...");
-    kubectl.run(&[
-        "-n",
-        &config.namespace,
-        "scale",
-        "deployment",
-        &config.deployment,
-        "--replicas=0",
-    ])?;
+    // Drain to 0 with verified polling (not just scale + sleep)
+    println!("  Draining to verified 0 pods...");
+    drain::drain_pods(kubectl, config)?;
 
-    // Wait for scale-down
-    std::thread::sleep(Duration::from_secs(5));
+    // Pre-burst starting line verification
+    println!("  Verifying starting line...");
+    drain::verify_starting_line(kubectl, config, expected_gw, expected_wh)?;
 
     // BURST: Scale to N
     let burst_start = Instant::now();

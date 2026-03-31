@@ -6,14 +6,20 @@ deployment: nginx-burst
 timeout_secs: 600
 poll_interval_secs: 5
 
-# Cooldown seconds between matrix scenarios (default: 10)
-cooldown_secs: 10
+# Cooldown seconds between matrix scenarios (applied AFTER drain completes, default: 15)
+cooldown_secs: 15
 
-# Seconds to wait for HelmRelease rollout after patching replicas (default: 30)
-rollout_wait_secs: 30
+# Seconds to wait for HelmRelease rollout after patching replicas (default: 120)
+rollout_wait_secs: 120
 
 # Node readiness poll interval in seconds (default: 15)
 node_poll_interval_secs: 15
+
+# Pod drain configuration — ensures clean state between scenarios
+# Max seconds to wait for pods to terminate during drain (default: 120)
+drain_timeout_secs: 120
+# How often to check pod count during drain (default: 5)
+drain_poll_interval_secs: 5
 
 # Pod label selector override (default: app={deployment})
 # pod_label: "app=nginx-burst"
