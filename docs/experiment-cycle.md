@@ -1,138 +1,121 @@
 # Experiment Cycle
 
-burst-forge experiment cycles are the systematic method for discovering and
-eliminating bottlenecks in Kubernetes secret injection at scale.
+Systematic method for discovering and eliminating bottlenecks in Kubernetes
+secret injection at scale.
 
 ## The Cycle
 
 ```
-1. IDENTIFY   -- analyze previous run output for the limiting factor
+1. IDENTIFY    -- analyze previous run output for the limiting factor
 2. HYPOTHESIZE -- propose ONE change and predict its effect
-3. DOCUMENT   -- write experiment page on Confluence (before running)
-4. APPLY      -- make the single change (k8s manifest, config, or infra)
-5. RUN        -- burst-forge matrix --scenario "1000-pods"
-6. MEASURE    -- read burst output: Running/Pending/Failed/Injected + timing
-7. REPORT     -- update Confluence with actual results vs. prediction
-8. ITERATE    -- back to step 1 with new data
+3. DOCUMENT    -- write experiment page on Confluence (before running)
+4. APPLY       -- make the single change (k8s manifest, config, or infra)
+5. RUN         -- burst-forge flow <name> [--scenario <tier>]
+6. MEASURE     -- read burst output: Running/Pending/Failed/Injected + timing
+7. REPORT      -- update Confluence with actual results vs. prediction
+8. ITERATE     -- back to step 1 with new data
 ```
 
 ### Rules
 
-- **Change ONE variable per iteration.** If you change two things, you can't
-  attribute the result to either one.
-- **Document BEFORE running.** The hypothesis and expected outcome go on
-  Confluence before the experiment fires. This prevents post-hoc rationalization.
-- **Keep the full chain.** Every bottleneck discovered gets a number and stays
-  in the chain table, even after it's fixed. The chain tells the story.
+- **Change ONE variable per iteration.** Two changes = ambiguous attribution.
+- **Document BEFORE running.** Hypothesis and expected outcome on Confluence
+  before the experiment fires. Prevents post-hoc rationalization.
+- **Keep the full chain.** Every bottleneck gets a number and stays in the
+  chain table, even after fixed. The chain tells the story.
+- **Config is the source of truth.** Every experiment has a YAML config in
+  `configs/` that captures ALL parameters. No ad-hoc CLI flags or env vars.
+
+## Running Experiments
+
+```bash
+# Full matrix (all tiers 50-1000)
+burst-forge flow cerebras-matrix
+
+# Single scenario from a matrix
+burst-forge flow cerebras-matrix --scenario cerebras-300
+
+# Quick iteration on 1000-pod scenario
+burst-forge flow single-1000
+```
+
+The `flow` subcommand discovers `configs/{name}.yaml` and handles the full
+lifecycle: kustomization suspension, node scaling, IPAMD warmup, burst execution,
+Confluence publishing, and teardown. Zero manual steps.
 
 ## What Each Phase Tells You
 
 ### Phase 1: RESET (should be < 5s)
 
-If reset takes long, pods are stuck terminating. Check `terminationGracePeriodSeconds`
-on the deployment and whether finalizers are blocking deletion.
+If slow, pods are stuck terminating. Check `terminationGracePeriodSeconds`.
 
-### Phase 2: WARMUP (typically 2-6 min)
-
-The warmup phase has 5 sub-steps, each revealing a different bottleneck class:
+### Phase 2: WARMUP (typically 3-6 min)
 
 | Step | What it measures | Bottleneck if slow |
 |------|------------------|--------------------|
 | 2a. Nodes | EKS node group scale-up | EC2 launch time, ASG capacity |
 | 2b. Images | DaemonSet image pre-pull | Image size, registry throughput |
-| 2c. Gateway | GW deployment rollout | Readiness probe delay, IPAMD, scheduling |
+| 2b+. IPAMD | Secondary ENI attachment | Subnet capacity, WARM_PREFIX_TARGET |
+| 2c. Gateway | GW deployment rollout | Readiness probe, CPU scheduling |
 | 2d. Webhook | WH deployment rollout | Same as gateway |
 | 2e. Gates | Infrastructure verification | Any of the above not converging |
 
-**Gate 3 failure (GW or WH not ready)** is the most common warmup failure.
-Causes: nodeSelector mismatch, CPU exhaustion on target nodes, IPAMD IP
-assignment failure. Always check pod events with `kubectl describe pod`.
+### Phase 3: EXECUTION (the measurement)
 
-### Phase 3: EXECUTION (the actual measurement)
-
-The burst output columns tell you exactly where things stall:
-
-| Column | Meaning | Healthy | Unhealthy |
-|--------|---------|---------|-----------|
-| Running | Pods with all containers started | Climbing to N | Stuck below N |
-| Pending | Admitted but not scheduled/started | Draining to 0 | Stuck > 0 |
-| Failed | Pods that crashed or were rejected | 0 | > 0 |
-| Injected | Pods with injection env vars present | Climbing to N | Stuck below N |
-
-**Reading the data:**
-
-- **Injected climbs but Running stuck** -- scheduling bottleneck (CPU, IPAMD, node capacity)
-- **Running climbs but Injected stuck** -- injection bottleneck (gateway QPS, webhook timeout)
-- **Failed > 0** -- crash-on-error, image pull failures, or OOM
-- **Pending stuck, Injected stuck** -- webhook timeout (pods never admitted)
+| Column | Healthy | Unhealthy | Root cause |
+|--------|---------|-----------|------------|
+| Running climbs to N | OK | Stuck | Scheduling (CPU, IPAMD, node capacity) |
+| Injected climbs to N | OK | Stuck | Injection (gateway QPS, webhook timeout) |
+| Failed > 0 | - | Bad | crash-on-error, image pull, OOM |
+| Pending stuck | - | Bad | Webhook timeout (pods never admitted) |
 
 ## Pod Injection Lifecycle
 
-Every tunable in the path from pod creation to Running with secrets:
+Every tunable from pod creation to Running with secrets:
 
 ```
-API Server -- creates pod object
-    |
-    v
-Mutating Webhook (Akeyless) -- injects init container + env vars
-    | tunables: webhookTimeoutSeconds, WH replicas, WH CPU
-    v
-Scheduler -- assigns pod to node
-    | tunables: nodeSelector, CPU requests, pods_per_node, node count
-    v
-Kubelet -- creates pod sandbox
-    | tunables: VPC CNI prefix delegation, WARM_PREFIX_TARGET, IPAMD
-    v
-Init Container -- fetches secret from gateway
-    | tunables: GW QPS (5/replica), GW replicas, CRASH_POD_ON_ERROR,
-    |           AGENT_REQUESTS_CPU, AGENT_LIMITS_CPU
-    v
-Main Container -- starts with injected env vars
-    | tunables: image pull (warmup DaemonSet), container startup time
-    v
-Pod Running -- burst-forge detects injection via env prefix
+API Server → Mutating Webhook → Scheduler → Kubelet → Init Container → Main Container → Running
+               |                    |           |           |
+               WH replicas       nodeSelector  IPAMD     GW QPS (5/replica)
+               WH timeout        CPU requests  prefix    CRASH_POD_ON_ERROR
+                                  maxPods      delegation AGENT_REQUESTS_CPU
 ```
+
+## Bottleneck Chain (14 discovered)
+
+| # | Bottleneck | Fix | Status |
+|---|-----------|-----|--------|
+| 1 | Webhook timeout 10s | 30s | FIXED |
+| 2 | GW readiness 120s | 30s initialDelay | FIXED |
+| 3 | FluxCD reverts scaling | Suspend HelmReleases + kustomizations | FIXED |
+| 4 | CNI stall on new nodes | hostNetwork warmup DaemonSet | FIXED |
+| 5 | GW QPS=5/replica | Scale replicas horizontally | ACCEPTED |
+| 6 | VPC CNI IP mode | Prefix delegation | FIXED |
+| 7 | IPAMD warmup on burst | Pin infra to workers + ipamd_warmup_secs | FIXED |
+| 8 | Worker CPU for 11 GW | 4 workers | FIXED |
+| 9 | Init crash-on-error | CRASH_POD_ON_ERROR=disable | FIXED |
+| 10 | Chart nodeSelector | HelmRelease postRenderers | FIXED |
+| 11 | Agent CPU 250m | 25m request / 100m limit | FIXED |
+| 12 | FluxCD workload revert | suspend_kustomizations config | FIXED |
+| 13 | /24 subnet exhaustion | /20 subnets + custom networking | FIXED |
+| 14 | burst-forge premature exit | Fixed CAPACITY LIMIT detection | FIXED |
 
 ## Cluster Topology
 
-Three node groups serve different roles. Infrastructure pods (GW, WH) MUST run
-on workers with warm IPAMD. Burst pods run on burst nodes.
-
 ```
-scale-test-system:   1x t3.medium  -- FluxCD, CoreDNS, image-cache, Zot
-scale-test-workers:  4x t3.medium  -- GW (up to 11), WH (up to 7), warm IPAMD
-scale-test-burst:    Nx m5.xlarge  -- burst pods, managed by burst-forge lifecycle
+scale-test-system:   1x t3.medium  -- FluxCD, CoreDNS, image-cache
+scale-test-workers:  3-4x t3.medium -- GW + WH (warm IPAMD, nodeSelector via postRenderers)
+scale-test-burst:    0-19x m5.xlarge -- burst pods (burst-forge lifecycle)
 ```
 
-Workers use `nodeSelector` via HelmRelease `postRenderers` (Akeyless charts don't
-support nodeSelector in values). burst-forge suspends HelmReleases during tests
-to prevent FluxCD from reverting replica counts.
-
-## Bottleneck Chain (living document)
-
-| # | Bottleneck | Root Cause | Fix | Status |
-|---|-----------|-----------|-----|--------|
-| 1 | Webhook timeout 10s | K8s admission window too short | webhookTimeoutSeconds: 30 | FIXED |
-| 2 | Gateway readiness 120s | Conservative probe | initialDelaySeconds: 30 | FIXED |
-| 3 | FluxCD reverts scaling | GitOps reconciliation overwrites replicas | Suspend during burst | FIXED |
-| 4 | CNI stall on new nodes | IPAMD warm-up race | hostNetwork on warmup DaemonSet | FIXED |
-| 5 | Gateway QPS=5/replica | client-go default throttle | Scale replicas horizontally | ACCEPTED |
-| 6 | VPC CNI IP exhaustion | Individual IP allocation mode | Prefix delegation | FIXED |
-| 7 | IPAMD warm-up on burst nodes | New nodes need 2-3 min for IPs | Pin infra to workers | FIXED |
-| 8 | Worker CPU for 11 GW | 2 t3.medium workers too small | Scale workers to 4 | FIXED |
-| 9 | Init container crash | CRASH_POD_ON_ERROR=enable | Disable crash-on-error | FIXED |
-| 10 | GW nodeSelector via values | Chart ignores nodeSelector in values | HelmRelease postRenderers | FIXED |
-| 11 | Agent CPU request 250m | Init container dominates scheduling | Reduce to 25m/100m | TESTING |
+Infrastructure pods MUST run on workers (warm IPAMD). Burst pods on burst nodes.
+VPC CNI custom networking: pod IPs from /20 subnets, node IPs on /24 subnets.
 
 ## Cost Awareness
 
-Burst nodes are m5.xlarge at ~$0.192/hr. 19 nodes = $3.65/hr = $87.60/day.
-Always verify nodes are scaled to 0 after experiments:
+Burst nodes: m5.xlarge ~$0.192/hr. 19 nodes = $3.65/hr = $87.60/day.
+burst-forge scales to 0 on cleanup and Ctrl+C. Always verify after experiments:
 
 ```bash
 burst-forge nodes status
-# Or: aws eks describe-nodegroup --cluster-name scale-test \
-#   --nodegroup-name scale-test-burst --query 'nodegroup.scalingConfig'
 ```
-
-The 5 permanent nodes (1 system + 4 workers) cost ~$0.21/hr = $5/day.

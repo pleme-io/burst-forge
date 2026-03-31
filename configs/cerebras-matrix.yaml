@@ -58,6 +58,7 @@ confluence:
   space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
   parent_page_id: "3972595716"
   user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"
 
 # 2 secrets/pod doubles GW load: effective QPS = 2.5 pods/s per GW replica
 # GW counts use optimized formula for speed
