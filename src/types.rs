@@ -60,6 +60,9 @@ pub struct WarmupTimings {
     pub nodes_ms: u64,
     /// Time for image warmup DaemonSet rollout (ms).
     pub images_ms: u64,
+    /// Time for IPAMD secondary ENI warmup (ms).
+    #[serde(default)]
+    pub ipamd_warmup_ms: u64,
     /// Time for gateway deployment to reach desired replicas (ms).
     pub gateway_ms: u64,
     /// Time for webhook deployment to reach desired replicas (ms).

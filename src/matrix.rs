@@ -108,7 +108,7 @@ pub fn run_matrix(
         .collect();
     output::print_matrix_summary(&summary_rows);
 
-    // Resume HelmReleases and reset replicas after all scenarios
+    // Resume HelmReleases, kustomizations, and reset replicas after all scenarios
     output::print_matrix_cleanup(skip_scaling);
     if !skip_scaling {
         let _ = kubectl.run(&[
@@ -130,6 +130,15 @@ pub fn run_matrix(
             &config.webhook_release, "--type=merge",
             "-p", r#"{"spec":{"suspend":false}}"#,
         ]);
+
+        // Resume kustomizations suspended during warmup
+        for ks in &config.suspend_kustomizations {
+            let _ = kubectl.run(&[
+                "-n", &config.suspend_kustomizations_namespace,
+                "patch", "kustomization", ks,
+                "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+            ]);
+        }
 
         // Legacy cleanup path (in case old code path is hit)
         if let Err(e) = kubectl.patch_helmrelease_replicas(

@@ -119,6 +119,21 @@ pub struct Config {
     #[serde(default = "default_node_poll_interval")]
     pub node_poll_interval_secs: u64,
 
+    /// Seconds to wait after image warmup for IPAMD to attach secondary ENIs.
+    /// Custom networking requires 2-3 minutes for ENI setup on new nodes.
+    /// Set to 0 to skip (default). Recommended: 150 for custom networking.
+    #[serde(default)]
+    pub ipamd_warmup_secs: u64,
+
+    /// FluxCD kustomization names to suspend during burst and resume after cleanup.
+    /// Prevents GitOps from reverting deployment replica counts mid-experiment.
+    #[serde(default)]
+    pub suspend_kustomizations: Vec<String>,
+
+    /// Namespace where `suspend_kustomizations` live.
+    #[serde(default = "default_flux_namespace")]
+    pub suspend_kustomizations_namespace: String,
+
     /// Image cache (Zot registry) configuration.
     #[serde(default)]
     pub image_cache: Option<ImageCacheConfig>,

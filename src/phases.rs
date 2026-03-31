@@ -149,9 +149,47 @@ pub fn run_phase_2_warmup(
         timings.images_ms = sub_start.elapsed().as_millis() as u64;
     }
 
+    // 2b+: IPAMD warmup — wait for secondary ENI attachment on burst nodes.
+    // Custom networking requires 2-3 minutes after node Ready for IPAMD
+    // to attach ENIs on /20 pod subnets and allocate prefix warm pool.
+    let sub_start = Instant::now();
+    if config.ipamd_warmup_secs > 0 {
+        output::print_action(&format!(
+            "2b+. Waiting {}s for IPAMD ENI warmup...",
+            config.ipamd_warmup_secs
+        ));
+        let warmup_duration = Duration::from_secs(config.ipamd_warmup_secs);
+        let poll = Duration::from_secs(15);
+        let start = Instant::now();
+        while start.elapsed() < warmup_duration {
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed = start.elapsed().as_secs();
+            output::print_progress(elapsed, &format!(
+                "IPAMD warmup: {}s / {}s",
+                elapsed, config.ipamd_warmup_secs
+            ));
+            std::thread::sleep(poll.min(warmup_duration.saturating_sub(start.elapsed())));
+        }
+        output::print_action("IPAMD warmup complete");
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        timings.ipamd_warmup_ms = sub_start.elapsed().as_millis() as u64;
+    }
+
     // 2c: Gateway scaling
     let sub_start = Instant::now();
     if !skip_scaling {
+        // Suspend kustomizations (prevents GitOps from reverting deployment replicas)
+        for ks in &config.suspend_kustomizations {
+            output::print_action(&format!("  Suspending kustomization {ks}..."));
+            let _ = kubectl.run(&[
+                "-n", &config.suspend_kustomizations_namespace,
+                "patch", "kustomization", ks,
+                "--type=merge", "-p", r#"{"spec":{"suspend":true}}"#,
+            ]);
+        }
+
         // Suspend HelmReleases
         output::print_action("2c. Scaling injection infrastructure...");
         let _ = kubectl.run(&[

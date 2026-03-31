@@ -152,6 +152,18 @@ fn main() -> anyhow::Result<()> {
             output::eprint_warning(&format!("{remaining} pods may still be terminating"));
         }
 
+        // Resume suspended kustomizations
+        for ks in &cleanup_cfg.suspend_kustomizations {
+            let _ = kctl.run(&[
+                "-n", &cleanup_cfg.suspend_kustomizations_namespace,
+                "patch", "kustomization", ks,
+                "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+            ]);
+        }
+        if !cleanup_cfg.suspend_kustomizations.is_empty() {
+            output::eprint_status("Kustomizations resumed");
+        }
+
         // Scale node group to 0
         if let Some(ng) = &cleanup_cfg.node_group {
             let _ = nodes::scale_node_group(ng, 0);
@@ -295,10 +307,14 @@ fn main() -> anyhow::Result<()> {
             output::print_action("Resetting webhook to 1 replica...");
             let _ = kubectl.run(&["-n", &cfg.injection_namespace, "scale", "deployment", &cfg.webhook_deployment, "--replicas=1"]);
 
-            // 4. Resume HelmReleases
+            // 4. Resume HelmReleases + kustomizations
             output::print_action("Resuming HelmReleases...");
             let _ = kubectl.run(&["-n", &cfg.injection_namespace, "patch", "helmrelease", &cfg.gateway_release, "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#]);
             let _ = kubectl.run(&["-n", &cfg.injection_namespace, "patch", "helmrelease", &cfg.webhook_release, "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#]);
+            for ks in &cfg.suspend_kustomizations {
+                output::print_action(&format!("Resuming kustomization {ks}..."));
+                let _ = kubectl.run(&["-n", &cfg.suspend_kustomizations_namespace, "patch", "kustomization", ks, "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#]);
+            }
 
             // 5. Scale burst nodes to 0
             if let Some(ng) = &cfg.node_group {
