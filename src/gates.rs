@@ -438,7 +438,9 @@ pub fn check_drain_gate(
         ));
     }
 
-    // Wait for gateway/webhook to recover from load
+    // Wait for gateway/webhook to be healthy (any replica count — next scenario handles scaling).
+    // After HelmRelease resume, FluxCD reconciles to base replica count (typically 1).
+    // The inter-scenario drain only needs pods drained + infra stable.
     let timeout = Duration::from_secs(config.rollout_wait_secs);
     let poll_interval = Duration::from_secs(5);
     let start = Instant::now();
@@ -455,18 +457,15 @@ pub fn check_drain_gate(
             &config.webhook_deployment,
         )?;
 
-        if gw_ready == expected_gw
-            && gw_desired == expected_gw
-            && wh_ready == expected_wh
-            && wh_desired == expected_wh
-        {
+        // Pass when GW and WH are stable (ready == desired, both > 0)
+        if gw_ready > 0 && gw_ready == gw_desired && wh_ready > 0 && wh_ready == wh_desired {
             return Ok(GateResult::pass(
                 "[Gate 5]",
                 format!(
-                    "Drain {} 0 pods, GW healthy",
+                    "Drain {} 0 pods, GW {gw_ready}/{gw_desired} stable",
                     output::dim(".."),
                 ),
-                format!("Drain complete: 0 pods, GW {gw_ready}/{expected_gw} healthy, WH {wh_ready}/{expected_wh} healthy"),
+                format!("Drain complete: 0 pods, GW {gw_ready}/{gw_desired} stable, WH {wh_ready}/{wh_desired} stable"),
             ));
         }
 
@@ -474,8 +473,8 @@ pub fn check_drain_gate(
             return Ok(GateResult::fail(
                 "[Gate 5]",
                 "Drain".to_string(),
-                format!("Drain complete but infrastructure not recovered after {}s", config.rollout_wait_secs),
-                format!("GW {expected_gw}/{expected_gw}, WH {expected_wh}/{expected_wh}"),
+                format!("Drain complete but infrastructure not stable after {}s", config.rollout_wait_secs),
+                "GW ready==desired, WH ready==desired".to_string(),
                 format!("GW {gw_ready}/{gw_desired}, WH {wh_ready}/{wh_desired} after {}s", config.rollout_wait_secs),
             ));
         }
