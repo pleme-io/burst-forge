@@ -276,7 +276,7 @@ fn main() -> anyhow::Result<()> {
             // 2. Drain all pods
             println!("  Draining pods...");
             let app_label = cfg.resolved_pod_label();
-            let _ = drain::wait_for_zero_pods(&kubectl, &cfg.namespace, &app_label);
+            let _ = drain::wait_for_zero_pods(&kubectl, &cfg, &app_label);
 
             // 3. Reset gateway/webhook to 1 replica
             println!("  Resetting gateway to 1 replica...");
