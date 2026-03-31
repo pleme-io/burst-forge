@@ -9,6 +9,7 @@ mod config;
 mod flux;
 mod kubectl;
 mod matrix;
+mod nodes;
 mod types;
 mod verify;
 
@@ -66,6 +67,28 @@ enum Commands {
 
     /// Reset deployment to 0 replicas
     Reset,
+
+    /// Manage EKS node group for burst testing
+    Nodes {
+        #[command(subcommand)]
+        action: NodesAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodesAction {
+    /// Scale node group up to a specific count
+    Up {
+        /// Number of nodes to scale to
+        #[arg(long)]
+        count: u32,
+    },
+
+    /// Scale node group down to 0
+    Down,
+
+    /// Show current node group status
+    Status,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -145,6 +168,45 @@ fn main() -> anyhow::Result<()> {
                 "--replicas=0",
             ])?;
             println!("Reset {} to 0 replicas", cfg.deployment);
+        }
+
+        Commands::Nodes { action } => {
+            let ng = cfg.node_group.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No node_group configured. Add node_group section to burst-forge.yaml"
+                )
+            })?;
+
+            match action {
+                NodesAction::Up { count } => {
+                    nodes::scale_node_group(ng, count)?;
+                    nodes::wait_for_nodes(
+                        &kubectl,
+                        count,
+                        std::time::Duration::from_secs(cfg.timeout_secs),
+                    )?;
+                    nodes::tag_nodes(&kubectl, "burst-forge=true")?;
+                    println!("Node group scaled to {count} nodes");
+                }
+                NodesAction::Down => {
+                    nodes::scale_node_group(ng, 0)?;
+                    println!(
+                        "Node group {} scaling to 0",
+                        ng.nodegroup_name
+                    );
+                }
+                NodesAction::Status => {
+                    let (desired, min, max, status) =
+                        nodes::get_node_group_status(ng)?;
+                    let ready = nodes::count_ready_nodes(&kubectl)?;
+                    println!("Node Group: {}", ng.nodegroup_name);
+                    println!("  Cluster:  {}", ng.cluster_name);
+                    println!("  Region:   {}", ng.region);
+                    println!("  Status:   {status}");
+                    println!("  Scaling:  min={min} desired={desired} max={max}");
+                    println!("  Ready:    {ready} nodes in cluster");
+                }
+            }
         }
     }
 

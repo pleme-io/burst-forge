@@ -13,6 +13,30 @@ pub struct Scenario {
     pub gateway_replicas: u32,
     #[serde(default = "default_one")]
     pub webhook_replicas: u32,
+    /// Override node count (auto-calculated from replicas/pods_per_node if absent)
+    #[serde(default)]
+    pub nodes: Option<u32>,
+}
+
+/// EKS node group configuration for burst testing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeGroupConfig {
+    /// EKS cluster name
+    pub cluster_name: String,
+    /// Node group name to scale
+    pub nodegroup_name: String,
+    /// AWS region
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// AWS profile
+    #[serde(default)]
+    pub aws_profile: Option<String>,
+    /// Max pods per node (for calculating required nodes)
+    #[serde(default = "default_pods_per_node")]
+    pub pods_per_node: u32,
+    /// Max node group size
+    #[serde(default = "default_max_nodes")]
+    pub max_nodes: u32,
 }
 
 /// Top-level burst-forge configuration.
@@ -42,6 +66,10 @@ pub struct Config {
     #[serde(default)]
     pub scenarios: Vec<Scenario>,
 
+    /// EKS node group management for burst testing
+    #[serde(default)]
+    pub node_group: Option<NodeGroupConfig>,
+
     /// Namespace where Akeyless gateway and webhook live.
     #[serde(default = "default_akeyless_namespace")]
     pub akeyless_namespace: String,
@@ -69,6 +97,9 @@ fn default_timeout() -> u64 { 600 }
 fn default_poll_interval() -> u64 { 5 }
 fn default_replicas() -> u32 { 50 }
 fn default_one() -> u32 { 1 }
+fn default_region() -> String { "us-east-1".to_string() }
+fn default_pods_per_node() -> u32 { 58 }
+fn default_max_nodes() -> u32 { 20 }
 fn default_akeyless_namespace() -> String { "akeyless-system".to_string() }
 fn default_gateway_label() -> String { "app.kubernetes.io/name=akeyless-api-gateway".to_string() }
 fn default_webhook_label() -> String { "app=akeyless-secrets-injection".to_string() }
@@ -102,8 +133,10 @@ pub fn discover(explicit_path: Option<&str>) -> anyhow::Result<Config> {
             Ok(Config::clone(&guard))
         }
         Err(_) => {
-            // No config file found — use defaults
-            Ok(Config::default())
+            // No config file found — deserialize from empty YAML so
+            // serde #[default] functions produce the correct values
+            // (Rust's Default trait gives empty strings, not our defaults).
+            Ok(serde_json::from_str("{}")?)
         }
     }
 }

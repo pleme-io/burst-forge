@@ -25,6 +25,15 @@ webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection
 
+# EKS node group management for burst testing
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+
 # Scaling matrix — work backwards from 1000 pods
 # Historical data: GW = pods/90 with 40% headroom
 scenarios:

@@ -1,10 +1,13 @@
 //! Scaling matrix — run multiple scenarios, collect results.
 
+use std::time::Duration;
+
 use chrono::Utc;
 
 use crate::burst;
 use crate::config::Config;
 use crate::kubectl::KubeCtl;
+use crate::nodes;
 use crate::types::{MatrixReport, ScenarioResult};
 use crate::verify;
 
@@ -38,6 +41,35 @@ pub fn run_matrix(
         anyhow::bail!(
             "No scenarios matched filter {scenario_filter:?}"
         );
+    }
+
+    // Scale up node group if configured
+    if let Some(ng) = &config.node_group {
+        let max_nodes_needed = scenarios
+            .iter()
+            .map(|s| {
+                s.nodes
+                    .unwrap_or_else(|| nodes::calculate_nodes(s.replicas, ng.pods_per_node))
+            })
+            .max()
+            .unwrap_or(1)
+            .min(ng.max_nodes);
+
+        println!("\n=== Node Group Pre-Heat: {max_nodes_needed} nodes ===\n");
+        nodes::scale_node_group(ng, max_nodes_needed)?;
+        nodes::wait_for_nodes(kubectl, max_nodes_needed, Duration::from_secs(config.timeout_secs))?;
+        nodes::tag_nodes(kubectl, "burst-forge=true")?;
+
+        // Wait for image-warmup DaemonSet if image cache is configured
+        if config.cache_registry.is_some() {
+            // Best-effort wait for image-warmup DaemonSet — non-fatal if not found
+            let _ = nodes::wait_for_daemonset_ready(
+                kubectl,
+                "image-cache",
+                "image-warmup",
+                Duration::from_secs(300),
+            );
+        }
     }
 
     println!(
@@ -77,6 +109,14 @@ pub fn run_matrix(
             &config.webhook_release,
             1,
         );
+    }
+
+    // Scale node group back to 0 after all scenarios
+    if let Some(ng) = &config.node_group {
+        println!("\n=== Scaling node group back to 0 ===\n");
+        if let Err(e) = nodes::scale_node_group(ng, 0) {
+            println!("  WARNING: Failed to scale down node group: {e}");
+        }
     }
 
     Ok(MatrixReport {
