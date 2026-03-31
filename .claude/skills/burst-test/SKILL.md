@@ -1,6 +1,6 @@
 ---
 name: burst-test
-description: Set up and run Akeyless injection burst tests on EKS. Use when configuring burst-forge, running scaling matrix tests, troubleshooting burst test failures, or preparing the cluster for scale testing.
+description: Set up and run secrets injection burst tests on Kubernetes. Use when configuring burst-forge, running scaling matrix tests, troubleshooting burst test failures, or preparing the cluster for scale testing. Works with any injection system (Akeyless, Vault, etc.) via config.
 ---
 
 # Burst Testing with burst-forge
