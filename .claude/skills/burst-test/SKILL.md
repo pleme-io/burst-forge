@@ -219,6 +219,34 @@ The `matrix` command is the top-level orchestrator that replaces manual fleet co
 6. Outputs full JSON report
 7. Scales nodes back to 0
 
+## Critical: Warmup and Cleanup
+
+### Pre-Heating (MUST complete before burst)
+Node warmup is critical — cold nodes cause ImagePull delays that skew results:
+1. **Node scaling**: burst-forge scales the node group and waits for ALL nodes Ready
+2. **Image warmup**: The `image-warmup` DaemonSet pre-pulls nginx + sidecar images to every node. burst-forge waits for the DaemonSet to report all pods Running before proceeding
+3. **FluxCD health**: All kustomizations must be True — a partially reconciled cluster produces unreliable results
+4. **Gateway/webhook rollout**: After patching HelmRelease replicas, burst-forge waits for the deployment rollout to complete (all new pods Ready)
+
+If ANY warmup step is skipped, the burst results are invalid.
+
+### Cleanup/Teardown (MUST run — cost reasons)
+burst nodes are m5.xlarge at ~$0.192/hr each. 18 nodes = $3.46/hr = $83/day:
+- `matrix` command automatically scales burst nodes to 0 after ALL scenarios complete
+- If burst-forge is interrupted (Ctrl+C, crash, SSO timeout), manually teardown:
+  ```bash
+  burst-forge nodes down --kubeconfig /tmp/eks-scale-test.kubeconfig
+  # Or directly:
+  AWS_PROFILE=akeyless-development aws eks update-nodegroup-config \
+    --cluster-name scale-test --nodegroup-name scale-test-burst \
+    --scaling-config minSize=0,maxSize=20,desiredSize=0 --region us-east-1
+  ```
+- Always verify nodes are down after testing:
+  ```bash
+  burst-forge nodes status --kubeconfig /tmp/eks-scale-test.kubeconfig
+  ```
+- The 3 permanent nodes (system + workers) stay up at ~$0.13/hr total — acceptable for the test environment
+
 ## Troubleshooting
 
 ### Docker Hub Rate Limits
