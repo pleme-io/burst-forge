@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::kubectl::KubeCtl;
+use crate::output;
 
 /// Drain all pods matching the app label to 0, with verified polling.
 ///
@@ -56,17 +57,14 @@ pub fn wait_for_zero_pods(
         let elapsed = start.elapsed().as_secs();
 
         if count == 0 {
-            println!("  Draining pods... [{elapsed}s] 0 remaining -- clean");
+            output::print_drain_progress(elapsed, 0);
             return Ok(());
         }
 
-        println!("  Draining pods... [{elapsed}s] {count} remaining");
+        output::print_drain_progress(elapsed, count);
 
         if start.elapsed() > timeout {
-            println!(
-                "  Drain timeout after {}s with {count} pods remaining -- force deleting",
-                config.drain_timeout_secs
-            );
+            output::print_drain_timeout(config.drain_timeout_secs, count);
             force_delete_pods(kubectl, &config.namespace, app_label)?;
 
             // Brief wait for force-delete to take effect, then verify
@@ -77,7 +75,7 @@ pub fn wait_for_zero_pods(
                     "Force delete failed: {remaining} pods still exist after force-delete"
                 );
             }
-            println!("  Force delete complete -- 0 remaining");
+            output::print_status("Force delete complete -- 0 remaining");
             return Ok(());
         }
 
@@ -90,12 +88,13 @@ pub fn wait_for_zero_pods(
 /// # Errors
 ///
 /// Returns an error if kubectl fails.
+#[allow(clippy::unnecessary_wraps)]
 pub fn force_delete_pods(
     kubectl: &KubeCtl,
     namespace: &str,
     app_label: &str,
 ) -> anyhow::Result<()> {
-    println!("  Force deleting pods (--grace-period=0 --force)...");
+    output::print_action("Force deleting pods (--grace-period=0 --force)...");
     // Ignore errors from "no resources found" — that is a success case
     let _ = kubectl.run(&[
         "-n",
@@ -213,9 +212,9 @@ pub fn verify_gateway_health(
         );
     }
 
-    println!(
-        "  Gateway {gw_ready}/{gw_desired} ready, Webhook {wh_ready}/{wh_desired} ready"
-    );
+    output::print_status(&format!(
+        "Gateway {gw_ready}/{gw_desired} ready, Webhook {wh_ready}/{wh_desired} ready"
+    ));
     Ok(())
 }
 
@@ -266,9 +265,9 @@ pub fn verify_starting_line(
         &config.webhook_deployment,
     )?;
 
-    println!(
-        "  Starting line verified: 0 pods, gateway {gw_ready}/{expected_gw} ready, webhook {wh_ready}/{expected_wh} ready"
-    );
+    output::print_status(&format!(
+        "Starting line verified: 0 pods, gateway {gw_ready}/{expected_gw} ready, webhook {wh_ready}/{expected_wh} ready"
+    ));
 
     if gw_ready < expected_gw {
         anyhow::bail!(

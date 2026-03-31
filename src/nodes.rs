@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::NodeGroupConfig;
 use crate::kubectl::KubeCtl;
+use crate::output;
 
 /// Scale an EKS managed node group to the desired size.
 ///
@@ -20,10 +21,10 @@ use crate::kubectl::KubeCtl;
 pub fn scale_node_group(config: &NodeGroupConfig, desired: u32) -> anyhow::Result<()> {
     let desired = desired.min(config.max_nodes);
 
-    println!(
-        "  Scaling node group {} to {desired} nodes...",
+    output::print_action(&format!(
+        "Scaling node group {} to {desired} nodes...",
         config.nodegroup_name
-    );
+    ));
 
     let scaling_config = format!(
         "minSize={min},maxSize={max},desiredSize={desired}",
@@ -58,7 +59,7 @@ pub fn scale_node_group(config: &NodeGroupConfig, desired: u32) -> anyhow::Resul
         );
     }
 
-    println!("  Node group scaling request accepted (desired={desired})");
+    output::print_status(&format!("Node group scaling request accepted (desired={desired})"));
     Ok(())
 }
 
@@ -77,8 +78,10 @@ pub fn wait_for_nodes(
     timeout: Duration,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
-    println!("  Waiting for {desired} nodes to be Ready+Schedulable (timeout: {}s, poll: {}s)...",
-        timeout.as_secs(), poll_interval.as_secs());
+    output::print_status(&format!(
+        "Waiting for {desired} nodes to be Ready+Schedulable (timeout: {}s)...",
+        timeout.as_secs()
+    ));
 
     let start = Instant::now();
 
@@ -93,10 +96,10 @@ pub fn wait_for_nodes(
 
         let ready = count_ready_schedulable_nodes(kubectl)?;
         let elapsed = start.elapsed().as_secs();
-        println!("  [{elapsed:>4}s] Ready+Schedulable nodes: {ready}/{desired}");
+        output::print_progress(elapsed, &format!("Ready+Schedulable nodes: {ready}/{desired}"));
 
         if ready >= desired {
-            println!("  [Gate 1] Nodes: {ready}/{desired} Ready+Schedulable");
+            output::print_status(&format!("Nodes: {ready}/{desired} Ready+Schedulable"));
             return Ok(());
         }
 
@@ -126,7 +129,7 @@ pub fn calculate_nodes(replicas: u32, pods_per_node: u32) -> u32 {
 ///
 /// Returns an error if kubectl labeling fails.
 pub fn tag_nodes(kubectl: &KubeCtl, label: &str) -> anyhow::Result<()> {
-    println!("  Labeling nodes with {label}...");
+    output::print_action(&format!("Labeling nodes with {label}..."));
     // Label all nodes; --overwrite avoids errors if already set
     kubectl.run(&[
         "label",
@@ -222,7 +225,7 @@ pub fn get_node_group_status(
 
 /// Wait for an image-warmup `DaemonSet` to be fully rolled out.
 ///
-/// Matches the DaemonSet ready count against the number of Ready+schedulable
+/// Matches the `DaemonSet` ready count against the number of Ready+schedulable
 /// nodes. Polls until all desired pods are ready on every schedulable node.
 ///
 /// # Errors
@@ -236,10 +239,10 @@ pub fn wait_for_daemonset_ready(
     timeout: Duration,
 ) -> anyhow::Result<()> {
     let schedulable = count_ready_schedulable_nodes(kubectl)?;
-    println!(
-        "  Waiting for DaemonSet {namespace}/{name} rollout on {schedulable} schedulable nodes (timeout: {}s)...",
+    output::print_status(&format!(
+        "Waiting for DaemonSet {namespace}/{name} rollout on {schedulable} schedulable nodes (timeout: {}s)...",
         timeout.as_secs()
-    );
+    ));
 
     let start = Instant::now();
     let poll_interval = Duration::from_secs(15);
@@ -267,24 +270,24 @@ pub fn wait_for_daemonset_ready(
                     .unwrap_or(0);
                 let ready = json["status"]["numberReady"].as_u64().unwrap_or(0);
                 let elapsed = start.elapsed().as_secs();
-                println!(
-                    "  [{elapsed:>4}s] DaemonSet {name}: {ready}/{desired} ready, {schedulable} schedulable nodes"
-                );
+                output::print_progress(elapsed, &format!(
+                    "DaemonSet {name}: {ready}/{desired} ready, {schedulable} schedulable nodes"
+                ));
 
                 #[allow(clippy::cast_possible_truncation)]
                 if ready >= u64::from(schedulable)
                     && desired >= u64::from(schedulable)
                     && schedulable > 0
                 {
-                    println!(
-                        "  [Gate 2] Warmup: {ready}/{desired} pods on {schedulable} schedulable nodes"
-                    );
+                    output::print_status(&format!(
+                        "Warmup: {ready}/{desired} pods on {schedulable} schedulable nodes"
+                    ));
                     return Ok(());
                 }
             }
             Err(e) => {
                 let elapsed = start.elapsed().as_secs();
-                println!("  [{elapsed:>4}s] DaemonSet {name}: not found yet ({e})");
+                output::print_progress(elapsed, &format!("DaemonSet {name}: not found yet ({e})"));
             }
         }
 

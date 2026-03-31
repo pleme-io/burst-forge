@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::drain;
 use crate::kubectl::KubeCtl;
+use crate::output;
 
 /// Gate check result — either passes or fails with a message.
 #[derive(Debug)]
@@ -15,22 +16,34 @@ pub struct GateResult {
     pub gate: &'static str,
     pub passed: bool,
     pub message: String,
+    /// Short detail for dot-leader line (e.g., "19/19 Ready+Schedulable").
+    pub detail: String,
+    /// Expected state (shown on failure).
+    pub expected: String,
+    /// Actual state (shown on failure).
+    pub actual: String,
 }
 
 impl GateResult {
-    fn pass(gate: &'static str, message: String) -> Self {
+    fn pass(gate: &'static str, detail: String, message: String) -> Self {
         Self {
             gate,
             passed: true,
             message,
+            detail,
+            expected: String::new(),
+            actual: String::new(),
         }
     }
 
-    fn fail(gate: &'static str, message: String) -> Self {
+    fn fail(gate: &'static str, detail: String, message: String, expected: String, actual: String) -> Self {
         Self {
             gate,
             passed: false,
             message,
+            detail,
+            expected,
+            actual,
         }
     }
 }
@@ -42,17 +55,23 @@ impl GateResult {
 /// Returns an error if the gate failed and `strict_gates` is true.
 pub fn enforce(result: &GateResult, strict: bool) -> anyhow::Result<()> {
     if result.passed {
-        println!("{}", result.message);
+        output::print_gate_result(result.gate, &result.detail, true);
         Ok(())
     } else if strict {
-        println!("{}", result.message);
+        output::print_gate_result(result.gate, &result.detail, false);
+        if !result.expected.is_empty() {
+            output::print_gate_failure_detail(&result.expected, &result.actual);
+        }
         anyhow::bail!(
             "{} FAILED: {}",
             result.gate,
             result.message
         );
     } else {
-        eprintln!("WARNING: {}", result.message);
+        output::print_gate_result(result.gate, &result.detail, false);
+        if !result.expected.is_empty() {
+            output::print_gate_failure_detail(&result.expected, &result.actual);
+        }
         Ok(())
     }
 }
@@ -95,10 +114,10 @@ pub fn wait_for_ready_schedulable_nodes(
     timeout: Duration,
     poll_interval: Duration,
 ) -> anyhow::Result<GateResult> {
-    println!(
-        "  Waiting for {desired} Ready+Schedulable nodes (timeout: {}s)...",
+    output::print_status(&format!(
+        "Waiting for {desired} Ready+Schedulable nodes (timeout: {}s)...",
         timeout.as_secs()
-    );
+    ));
 
     let start = Instant::now();
 
@@ -109,19 +128,20 @@ pub fn wait_for_ready_schedulable_nodes(
         if ready >= desired {
             return Ok(GateResult::pass(
                 "[Gate 1]",
-                format!("[Gate 1] Nodes: {ready}/{desired} Ready+Schedulable"),
+                format!("Node Ready {}", output::dim(&format!("{ready}/{desired}"))),
+                format!("Nodes: {ready}/{desired} Ready+Schedulable"),
             ));
         }
 
-        println!("  [{elapsed:>4}s] Ready+Schedulable nodes: {ready}/{desired}");
+        output::print_progress(elapsed, &format!("Ready+Schedulable nodes: {ready}/{desired}"));
 
         if start.elapsed() > timeout {
             return Ok(GateResult::fail(
                 "[Gate 1]",
-                format!(
-                    "[Gate 1] FAILED: Nodes: {ready}/{desired} Ready+Schedulable after {}s timeout",
-                    timeout.as_secs()
-                ),
+                format!("Node Ready {}", output::dim(&format!("{ready}/{desired}"))),
+                format!("Nodes: {ready}/{desired} Ready+Schedulable after {}s timeout", timeout.as_secs()),
+                format!("{desired}/{desired} Ready+Schedulable"),
+                format!("{ready}/{desired} Ready+Schedulable after {}s", timeout.as_secs()),
             ));
         }
 
@@ -149,9 +169,9 @@ pub fn check_warmup_gate(
 ) -> anyhow::Result<GateResult> {
     let schedulable = count_ready_schedulable_nodes(kubectl)?;
 
-    println!(
-        "  Warmup gate: expecting DaemonSet {namespace}/{name} to match {schedulable} schedulable nodes"
-    );
+    output::print_status(&format!(
+        "Warmup: expecting DaemonSet {namespace}/{name} to match {schedulable} schedulable nodes"
+    ));
 
     let start = Instant::now();
     let poll_interval = Duration::from_secs(15);
@@ -167,31 +187,32 @@ pub fn check_warmup_gate(
                 let ready = json["status"]["numberReady"].as_u64().unwrap_or(0);
                 let elapsed = start.elapsed().as_secs();
 
-                println!("  [{elapsed:>4}s] DaemonSet {name}: {ready}/{desired} ready, {schedulable} schedulable nodes");
+                output::print_progress(elapsed, &format!(
+                    "DaemonSet {name}: {ready}/{desired} ready, {schedulable} schedulable nodes"
+                ));
 
                 #[allow(clippy::cast_possible_truncation)]
                 if ready >= u64::from(schedulable) && desired >= u64::from(schedulable) && schedulable > 0 {
                     return Ok(GateResult::pass(
                         "[Gate 2]",
-                        format!(
-                            "[Gate 2] Warmup: {ready}/{desired} pods on {schedulable} schedulable nodes"
-                        ),
+                        format!("Warmup {}", output::dim(&format!("{ready}/{desired}"))),
+                        format!("Warmup: {ready}/{desired} pods on {schedulable} schedulable nodes"),
                     ));
                 }
             }
             Err(e) => {
                 let elapsed = start.elapsed().as_secs();
-                println!("  [{elapsed:>4}s] DaemonSet {name}: not found yet ({e})");
+                output::print_progress(elapsed, &format!("DaemonSet {name}: not found yet ({e})"));
             }
         }
 
         if start.elapsed() > timeout {
             return Ok(GateResult::fail(
                 "[Gate 2]",
-                format!(
-                    "[Gate 2] FAILED: Warmup DaemonSet {namespace}/{name} not ready after {}s",
-                    timeout.as_secs()
-                ),
+                "Warmup".to_string(),
+                format!("Warmup DaemonSet {namespace}/{name} not ready after {}s", timeout.as_secs()),
+                format!("{schedulable}/{schedulable} ready on {schedulable} nodes"),
+                format!("Not ready after {}s", timeout.as_secs()),
             ));
         }
 
@@ -241,8 +262,10 @@ pub fn check_infrastructure_gate(
             return Ok(GateResult::pass(
                 "[Gate 3]",
                 format!(
-                    "[Gate 3] Infrastructure: GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh}"
+                    "Infrastructure {} GW {gw_ready}/{expected_gw} WH {wh_ready}/{expected_wh}",
+                    output::dim(".."),
                 ),
+                format!("Infrastructure: GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh}"),
             ));
         }
 
@@ -250,16 +273,19 @@ pub fn check_infrastructure_gate(
             return Ok(GateResult::fail(
                 "[Gate 3]",
                 format!(
-                    "[Gate 3] FAILED: Infrastructure not ready after {}s -- GW {gw_ready}/{gw_desired} (expected {expected_gw}), WH {wh_ready}/{wh_desired} (expected {expected_wh})",
-                    config.rollout_wait_secs
+                    "Infrastructure {} GW {gw_ready}/{expected_gw} WH {wh_ready}/{expected_wh}",
+                    output::dim(".."),
                 ),
+                format!("Infrastructure not ready after {}s", config.rollout_wait_secs),
+                format!("GW {expected_gw}/{expected_gw} ready, WH {expected_wh}/{expected_wh} ready"),
+                format!("GW {gw_ready}/{gw_desired} ready, WH {wh_ready}/{wh_desired} ready after {}s", config.rollout_wait_secs),
             ));
         }
 
         let elapsed = start.elapsed().as_secs();
-        println!(
-            "  [{elapsed:>4}s] Infra gate: GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh} -- waiting..."
-        );
+        output::print_progress(elapsed, &format!(
+            "Infra: GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh} -- waiting..."
+        ));
         std::thread::sleep(poll_interval);
     }
 }
@@ -291,9 +317,10 @@ pub fn check_starting_line_gate(
     if ready != 0 || desired != 0 {
         return Ok(GateResult::fail(
             "[Gate 4]",
-            format!(
-                "[Gate 4] FAILED: Starting line: deployment at {ready}/{desired} (expected 0/0)"
-            ),
+            "Starting Line".to_string(),
+            format!("Starting line: deployment at {ready}/{desired}"),
+            "deployment 0/0".to_string(),
+            format!("deployment {ready}/{desired}"),
         ));
     }
 
@@ -302,9 +329,10 @@ pub fn check_starting_line_gate(
     if pod_count != 0 {
         return Ok(GateResult::fail(
             "[Gate 4]",
-            format!(
-                "[Gate 4] FAILED: Starting line: {pod_count} pods still exist with label {app_label}"
-            ),
+            "Starting Line".to_string(),
+            format!("Starting line: {pod_count} pods still exist with label {app_label}"),
+            "0 pods".to_string(),
+            format!("{pod_count} pods with label {app_label}"),
         ));
     }
 
@@ -320,15 +348,15 @@ pub fn check_starting_line_gate(
         "--no-headers",
     ]);
     match non_succeeded {
-        Ok(output) => {
-            let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+        Ok(kubectl_output) => {
+            let lines: Vec<&str> = kubectl_output.lines().filter(|l| !l.trim().is_empty()).collect();
             if !lines.is_empty() {
                 return Ok(GateResult::fail(
                     "[Gate 4]",
-                    format!(
-                        "[Gate 4] FAILED: Starting line: {} non-Succeeded pods found",
-                        lines.len()
-                    ),
+                    "Starting Line".to_string(),
+                    format!("Starting line: {} non-Succeeded pods found", lines.len()),
+                    "0 non-Succeeded pods".to_string(),
+                    format!("{} non-Succeeded pods", lines.len()),
                 ));
             }
         }
@@ -355,25 +383,26 @@ pub fn check_starting_line_gate(
     if gw_ready < expected_gw {
         return Ok(GateResult::fail(
             "[Gate 4]",
-            format!(
-                "[Gate 4] FAILED: Starting line: gateway {gw_ready}/{expected_gw} -- not ready"
-            ),
+            "Starting Line".to_string(),
+            format!("Starting line: gateway {gw_ready}/{expected_gw} -- not ready"),
+            format!("GW {expected_gw}/{expected_gw} ready"),
+            format!("GW {gw_ready}/{expected_gw} ready"),
         ));
     }
     if wh_ready < expected_wh {
         return Ok(GateResult::fail(
             "[Gate 4]",
-            format!(
-                "[Gate 4] FAILED: Starting line: webhook {wh_ready}/{expected_wh} -- not ready"
-            ),
+            "Starting Line".to_string(),
+            format!("Starting line: webhook {wh_ready}/{expected_wh} -- not ready"),
+            format!("WH {expected_wh}/{expected_wh} ready"),
+            format!("WH {wh_ready}/{expected_wh} ready"),
         ));
     }
 
     Ok(GateResult::pass(
         "[Gate 4]",
-        format!(
-            "[Gate 4] Starting line: 0 pods, deployment 0/0, GW {gw_ready}/{expected_gw} ready, WH {wh_ready}/{expected_wh} ready"
-        ),
+        format!("Starting Line {} 0 pods, clean", output::dim("..")),
+        format!("Starting line: 0 pods, deployment 0/0, GW {gw_ready}/{expected_gw} ready, WH {wh_ready}/{expected_wh} ready"),
     ))
 }
 
@@ -402,7 +431,10 @@ pub fn check_drain_gate(
     if pod_count != 0 {
         return Ok(GateResult::fail(
             "[Gate 5]",
-            format!("[Gate 5] FAILED: Drain incomplete: {pod_count} pods remaining"),
+            "Drain".to_string(),
+            format!("Drain incomplete: {pod_count} pods remaining"),
+            "0 pods remaining".to_string(),
+            format!("{pod_count} pods remaining"),
         ));
     }
 
@@ -431,25 +463,27 @@ pub fn check_drain_gate(
             return Ok(GateResult::pass(
                 "[Gate 5]",
                 format!(
-                    "[Gate 5] Drain complete: 0 pods, GW {gw_ready}/{expected_gw} healthy, WH {wh_ready}/{expected_wh} healthy"
+                    "Drain {} 0 pods, GW healthy",
+                    output::dim(".."),
                 ),
+                format!("Drain complete: 0 pods, GW {gw_ready}/{expected_gw} healthy, WH {wh_ready}/{expected_wh} healthy"),
             ));
         }
 
         if start.elapsed() > timeout {
             return Ok(GateResult::fail(
                 "[Gate 5]",
-                format!(
-                    "[Gate 5] FAILED: Drain complete but infrastructure not recovered after {}s -- GW {gw_ready}/{gw_desired} (expected {expected_gw}), WH {wh_ready}/{wh_desired} (expected {expected_wh})",
-                    config.rollout_wait_secs
-                ),
+                "Drain".to_string(),
+                format!("Drain complete but infrastructure not recovered after {}s", config.rollout_wait_secs),
+                format!("GW {expected_gw}/{expected_gw}, WH {expected_wh}/{expected_wh}"),
+                format!("GW {gw_ready}/{gw_desired}, WH {wh_ready}/{wh_desired} after {}s", config.rollout_wait_secs),
             ));
         }
 
         let elapsed = start.elapsed().as_secs();
-        println!(
-            "  [{elapsed:>4}s] Drain gate: 0 pods, GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh} -- waiting for recovery..."
-        );
+        output::print_progress(elapsed, &format!(
+            "Drain: 0 pods, GW {gw_ready}/{expected_gw}, WH {wh_ready}/{expected_wh} -- recovery..."
+        ));
         std::thread::sleep(poll_interval);
     }
 }

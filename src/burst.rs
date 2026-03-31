@@ -7,6 +7,7 @@ use chrono::Utc;
 use crate::config::Config;
 use crate::drain;
 use crate::kubectl::KubeCtl;
+use crate::output;
 use crate::types::BurstResult;
 
 /// Run a single burst test: drain to 0 (verified), then scale to N, poll until done.
@@ -30,11 +31,11 @@ pub fn run_burst(
     let start = Instant::now();
     let timestamp = Utc::now().to_rfc3339();
 
-    println!("\n=== Burst #{iteration}: 0 -> {replicas} replicas ===\n");
+    output::print_phase(&format!("Burst #{iteration}: 0 -> {replicas} replicas"));
 
     // Patch maxSurge to match replica count — all pods created simultaneously
     // for maximum concurrent pressure on gateway/webhook
-    println!("  Patching maxSurge={replicas} for simultaneous pod creation...");
+    output::print_action(&format!("Patching maxSurge={replicas} for simultaneous pod creation..."));
     kubectl.run(&[
         "-n",
         &config.namespace,
@@ -46,16 +47,16 @@ pub fn run_burst(
     ])?;
 
     // Drain to 0 with verified polling (not just scale + sleep)
-    println!("  Draining to verified 0 pods...");
+    output::print_action("Draining to verified 0 pods...");
     drain::drain_pods(kubectl, config)?;
 
     // Pre-burst starting line verification
-    println!("  Verifying starting line...");
+    output::print_action("Verifying starting line...");
     drain::verify_starting_line(kubectl, config, expected_gw, expected_wh)?;
 
     // BURST: Scale to N
     let burst_start = Instant::now();
-    println!("  BURST: scaling to {replicas}...");
+    output::print_burst_start(replicas);
     kubectl.run(&[
         "-n",
         &config.namespace,
@@ -73,7 +74,7 @@ pub fn run_burst(
 
     loop {
         if burst_start.elapsed() > timeout_duration {
-            println!("  TIMEOUT after {}s", config.timeout_secs);
+            output::print_timeout(config.timeout_secs);
             break;
         }
 
@@ -99,12 +100,16 @@ pub fn run_burst(
             first_ready_time = Some(elapsed_ms);
         }
 
-        print!(
-            "\r  [{elapsed_ms:>5}ms] Running: {running:>3} | Pending: {pending:>3} | Failed: {failed:>3} | Injected: {injected:>3}"
+        output::print_progress_ms(
+            elapsed_ms,
+            &format!(
+                "Running: {running:>4} | Pending: {pending:>4} | Failed: {failed:>3} | Injected: {injected:>4}"
+            ),
         );
 
         if running >= replicas {
-            println!("\n  ALL {replicas} PODS READY in {elapsed_ms}ms");
+            let rate = injection_rate(running, injected);
+            output::print_burst_complete(running, replicas, elapsed_ms, rate);
             return Ok(BurstResult {
                 timestamp,
                 replicas_requested: replicas,
@@ -112,7 +117,7 @@ pub fn run_burst(
                 pods_failed: failed,
                 pods_pending: pending,
                 pods_injected: injected,
-                injection_success_rate: injection_rate(running, injected),
+                injection_success_rate: rate,
                 time_to_first_ready_ms: first_ready_time.unwrap_or(0),
                 time_to_all_ready_ms: Some(elapsed_ms),
                 #[allow(clippy::cast_possible_truncation)]
@@ -124,9 +129,7 @@ pub fn run_burst(
         }
 
         if running > 0 && pending == 0 && failed == 0 && running < replicas {
-            println!(
-                "\n  CAPACITY LIMIT: {running}/{replicas} pods (no more schedulable)"
-            );
+            output::print_capacity_limit(running, replicas);
             break;
         }
 

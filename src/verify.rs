@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::kubectl::KubeCtl;
+use crate::output;
 use crate::types::{ImageCacheCheck, ImageStatus, VerifyResult};
 
 /// Verify that the cluster infrastructure is ready for burst testing.
@@ -13,13 +14,17 @@ use crate::types::{ImageCacheCheck, ImageStatus, VerifyResult};
 ///
 /// Returns an error if critical infrastructure components are missing.
 pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<VerifyResult> {
-    println!("Verifying infrastructure...");
+    output::print_verify_header();
 
     // Check nodes
     let nodes = kubectl.run(&["get", "nodes", "--no-headers"])?;
     let node_count = nodes.lines().count();
     let ready_nodes = nodes.lines().filter(|l| l.contains("Ready")).count();
-    println!("  Nodes: {ready_nodes}/{node_count} Ready");
+    output::print_verify_check(
+        "Nodes",
+        &format!("{ready_nodes}/{node_count} Ready"),
+        ready_nodes > 0,
+    );
 
     if node_count == 0 {
         anyhow::bail!("No nodes found in cluster. Is kubeconfig correct?");
@@ -39,7 +44,11 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let gateway_replicas = gw.lines().filter(|l| l.contains("Running")).count();
-    println!("  Injection gateway: {gateway_replicas} Running (ns={}, label={})", config.injection_namespace, config.gateway_label);
+    output::print_verify_check(
+        "Injection Gateway",
+        &format!("{gateway_replicas} Running"),
+        gateway_replicas > 0,
+    );
 
     // Check injection webhook
     let inj = kubectl.run(&[
@@ -52,7 +61,11 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let webhook_replicas = inj.lines().filter(|l| l.contains("Running")).count();
-    println!("  Injection webhook: {webhook_replicas} Running (ns={}, label={})", config.injection_namespace, config.webhook_label);
+    output::print_verify_check(
+        "Injection Webhook",
+        &format!("{webhook_replicas} Running"),
+        webhook_replicas > 0,
+    );
 
     // Check deployment exists
     let deployment_found = match kubectl.run(&[
@@ -63,12 +76,12 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         &config.deployment,
         "--no-headers",
     ]) {
-        Ok(d) => {
-            println!("  Deployment: {d}");
+        Ok(_d) => {
+            output::print_verify_check("Deployment", &config.deployment, true);
             true
         }
-        Err(e) => {
-            println!("  Deployment: NOT FOUND ({e})");
+        Err(_e) => {
+            output::print_verify_check("Deployment", "NOT FOUND", false);
             false
         }
     };
@@ -104,7 +117,7 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         image_cache,
     };
 
-    println!("Infrastructure verified.");
+    output::print_verify_complete();
     Ok(result)
 }
 
@@ -121,7 +134,7 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
     let ic_namespace = config.image_cache_namespace();
     let ic_label = config.image_cache_label();
 
-    println!("  Checking image cache ({registry}) in ns={ic_namespace} label={ic_label}...");
+    output::print_action(&format!("Checking image cache ({registry}) in ns={ic_namespace} label={ic_label}..."));
 
     // Find a Zot pod
     let zot_pods = kubectl.run(&[
@@ -148,7 +161,7 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
     };
 
     let Some(pod_name) = zot_pod else {
-        println!("    No Zot pod found in {ic_namespace} (label={ic_label}), skipping image cache check");
+        output::print_warning(&format!("No Zot pod found in {ic_namespace} (label={ic_label}), skipping image cache check"));
         return Some(ImageCacheCheck {
             registry,
             images: config
@@ -206,8 +219,12 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
             Err(_) => (false, Vec::new()),
         };
 
-        let status = if cached { "CACHED" } else { "MISSING" };
-        println!("    {image_ref}: {status}");
+        let status_str = if cached {
+            output::green("CACHED")
+        } else {
+            output::red("MISSING")
+        };
+        output::print_status(&format!("  {image_ref}: {status_str}"));
         images.push(ImageStatus {
             image: image_ref.clone(),
             cached,
@@ -217,7 +234,7 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
 
     let all_cached = images.iter().all(|i| i.cached);
     if !all_cached {
-        println!("  WARNING: Not all required images are cached");
+        output::print_warning("Not all required images are cached");
     }
 
     Some(ImageCacheCheck { registry, images })

@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use crate::kubectl::KubeCtl;
+use crate::output;
 
 /// Wait for all listed kustomizations to become Ready, in order.
 ///
@@ -20,21 +21,18 @@ pub fn wait_for_kustomizations(
     poll_interval_secs: u64,
 ) -> anyhow::Result<()> {
     if kustomizations.is_empty() {
-        println!("No kustomizations configured, skipping wait.");
+        output::print_status("No kustomizations configured, skipping wait.");
         return Ok(());
     }
 
     let timeout = Duration::from_secs(timeout_secs);
     let poll = Duration::from_secs(poll_interval_secs);
 
-    println!(
-        "Waiting for {} kustomizations in namespace {flux_namespace} (timeout: {timeout_secs}s)...",
-        kustomizations.len()
-    );
+    output::print_flux_header(kustomizations.len(), flux_namespace, timeout_secs);
 
     for ks_name in kustomizations {
         let start = Instant::now();
-        println!("  Waiting for {ks_name}...");
+        output::print_flux_waiting(ks_name);
 
         loop {
             if start.elapsed() > timeout {
@@ -46,12 +44,12 @@ pub fn wait_for_kustomizations(
             match check_kustomization_ready(kubectl, flux_namespace, ks_name) {
                 Ok(true) => {
                     let elapsed = start.elapsed().as_secs();
-                    println!("  {ks_name}: Ready ({elapsed}s)");
+                    output::print_flux_ready(ks_name, elapsed);
                     break;
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    println!("  {ks_name}: error checking status: {e}");
+                    output::print_warning(&format!("{ks_name}: error checking status: {e}"));
                 }
             }
 
@@ -59,7 +57,7 @@ pub fn wait_for_kustomizations(
         }
     }
 
-    println!("All kustomizations ready.");
+    output::print_flux_complete();
     Ok(())
 }
 

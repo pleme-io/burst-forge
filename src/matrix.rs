@@ -10,6 +10,7 @@ use crate::drain;
 use crate::gates;
 use crate::kubectl::KubeCtl;
 use crate::nodes;
+use crate::output;
 use crate::types::{MatrixReport, ScenarioResult};
 use crate::verify;
 
@@ -64,7 +65,7 @@ pub fn run_matrix(
             .unwrap_or(1)
             .min(ng.max_nodes);
 
-        println!("\n=== Node Group Pre-Heat: {max_nodes_needed} nodes ===\n");
+        output::print_phase(&format!("Node Pre-Heat ({max_nodes_needed} nodes)"));
 
         // Node scaling failure is fatal — cannot run burst tests without nodes
         nodes::scale_node_group(ng, max_nodes_needed)
@@ -83,7 +84,9 @@ pub fn run_matrix(
 
         // [Gate 2] Warmup Gate — DaemonSet matches schedulable node count
         if let Some(warmup) = &config.warmup_daemonset {
-            println!("\n=== Waiting for warmup DaemonSet {}/{}  ===\n", warmup.namespace, warmup.name);
+            output::print_phase(&format!(
+                "Warmup DaemonSet {}/{}", warmup.namespace, warmup.name
+            ));
             let gate2 = gates::check_warmup_gate(
                 kubectl,
                 &warmup.namespace,
@@ -94,17 +97,15 @@ pub fn run_matrix(
         }
     }
 
-    println!(
-        "\n=== Scaling Matrix: {} scenarios ===\n",
-        scenarios.len()
-    );
+    output::print_phase(&format!("Scaling Matrix: {} scenarios", scenarios.len()));
 
     let mut results = Vec::new();
 
     for (i, scenario) in scenarios.iter().enumerate() {
-        println!(
-            "\n--- Scenario: {} (replicas={}, gw={}, wh={}) ---",
-            scenario.name,
+        output::print_scenario(
+            i,
+            scenarios.len(),
+            &scenario.name,
             scenario.replicas,
             scenario.gateway_replicas,
             scenario.webhook_replicas,
@@ -115,10 +116,10 @@ pub fn run_matrix(
 
         // Inter-scenario cleanup (skip after last)
         if i < scenarios.len() - 1 {
-            println!("\n  === Inter-scenario cleanup ===");
+            output::print_inter_scenario_cleanup();
 
             // Scale burst deployment to 0
-            println!("  Scaling deployment to 0...");
+            output::print_action("Scaling deployment to 0...");
             let _ = kubectl.run(&[
                 "-n", &config.namespace, "scale", "deployment",
                 &config.deployment, "--replicas=0",
@@ -127,7 +128,7 @@ pub fn run_matrix(
             // Wait for complete pod drain (verified 0 pods)
             let app_label = config.resolved_pod_label();
             if let Err(e) = drain::wait_for_zero_pods(kubectl, config, &app_label) {
-                eprintln!("  WARNING: Inter-scenario drain failed: {e}");
+                output::print_warning(&format!("Inter-scenario drain failed: {e}"));
             }
 
             // [Gate 5] Drain Gate — verify 0 pods AND infrastructure recovery
@@ -141,19 +142,32 @@ pub fn run_matrix(
             gates::enforce(&gate5, config.strict_gates)?;
 
             // Cooldown AFTER drain completes (not during)
-            println!(
-                "  Drain complete -- cooling down {}s before next scenario...",
-                config.cooldown_secs
-            );
+            output::print_cooldown(config.cooldown_secs);
             std::thread::sleep(std::time::Duration::from_secs(config.cooldown_secs));
         }
     }
 
     // Always attempt cleanup, regardless of scenario results
 
+    // Build summary table from results
+    let summary_rows: Vec<output::SummaryRow> = results
+        .iter()
+        .map(|r| {
+            output::build_summary_row(
+                &r.name,
+                r.replicas,
+                r.burst.as_ref().map(|b| b.pods_running),
+                r.burst.as_ref().and_then(|b| b.time_to_all_ready_ms),
+                r.burst.as_ref().map(|b| b.injection_success_rate),
+                r.error.is_some(),
+            )
+        })
+        .collect();
+    output::print_matrix_summary(&summary_rows);
+
     // Resume HelmReleases and reset replicas after all scenarios
+    output::print_matrix_cleanup(skip_scaling);
     if !skip_scaling {
-        println!("\n  Resetting deployments to 1 replica...");
         let _ = kubectl.run(&[
             "-n", &config.injection_namespace, "scale", "deployment",
             &config.gateway_deployment, "--replicas=1",
@@ -163,7 +177,6 @@ pub fn run_matrix(
             &config.webhook_deployment, "--replicas=1",
         ]);
 
-        println!("  Resuming HelmReleases (FluxCD takes control again)...");
         let _ = kubectl.run(&[
             "-n", &config.injection_namespace, "patch", "helmrelease",
             &config.gateway_release, "--type=merge",
@@ -181,22 +194,22 @@ pub fn run_matrix(
             &config.gateway_release,
             1,
         ) {
-            eprintln!("  WARNING: Failed to reset gateway replicas: {e}");
+            output::print_warning(&format!("Failed to reset gateway replicas: {e}"));
         }
         if let Err(e) = kubectl.patch_helmrelease_replicas(
             &config.injection_namespace,
             &config.webhook_release,
             1,
         ) {
-            eprintln!("  WARNING: Failed to reset webhook replicas: {e}");
+            output::print_warning(&format!("Failed to reset webhook replicas: {e}"));
         }
     }
 
     // Scale node group back to 0 after all scenarios — always attempt
     if let Some(ng) = &config.node_group {
-        println!("\n=== Scaling node group back to 0 ===\n");
+        output::print_phase("Scaling Node Group to 0");
         if let Err(e) = nodes::scale_node_group(ng, 0) {
-            eprintln!("  WARNING: Failed to scale down node group: {e}");
+            output::print_warning(&format!("Failed to scale down node group: {e}"));
         }
     }
 
@@ -222,10 +235,12 @@ pub fn run_matrix(
 
     if failure_count > 0 {
         // Still print the report JSON so the caller has the data
-        println!("\n=== MATRIX REPORT (with failures) ===");
+        output::print_phase("Matrix Report (with failures)");
         if let Ok(json) = serde_json::to_string_pretty(&report) {
             println!("{json}");
         }
+
+        output::print_matrix_failures(failure_count, total_count, &failure_summary);
 
         anyhow::bail!(
             "Matrix completed with {failure_count}/{total_count} scenario failures:\n{}",
@@ -249,6 +264,7 @@ fn make_error_result(scenario: &crate::config::Scenario, error: String) -> Scena
 }
 
 /// Run a single scenario and capture the result.
+#[allow(clippy::too_many_lines)]
 fn run_single_scenario(
     kubectl: &KubeCtl,
     config: &Config,
@@ -258,7 +274,7 @@ fn run_single_scenario(
     // Scale infrastructure (unless skipping)
     if !skip_scaling {
         // Suspend HelmReleases so FluxCD doesn't revert our replica changes
-        println!("  Suspending HelmReleases (prevent FluxCD revert)...");
+        output::print_action("Suspending HelmReleases (prevent FluxCD revert)...");
         let _ = kubectl.run(&[
             "-n", &config.injection_namespace, "patch", "helmrelease",
             &config.gateway_release, "--type=merge",
@@ -272,7 +288,7 @@ fn run_single_scenario(
 
         // Patch the underlying Deployments directly (not HelmRelease values)
         // This avoids the FluxCD reconciliation race entirely
-        println!("  Scaling gateway to {} replicas...", scenario.gateway_replicas);
+        output::print_action(&format!("Scaling gateway to {} replicas...", scenario.gateway_replicas));
         if let Err(e) = kubectl.run(&[
             "-n", &config.injection_namespace, "scale", "deployment",
             &config.gateway_deployment,
@@ -281,7 +297,7 @@ fn run_single_scenario(
             return make_error_result(scenario, format!("Failed to scale gateway: {e}"));
         }
 
-        println!("  Scaling webhook to {} replicas...", scenario.webhook_replicas);
+        output::print_action(&format!("Scaling webhook to {} replicas...", scenario.webhook_replicas));
         if let Err(e) = kubectl.run(&[
             "-n", &config.injection_namespace, "scale", "deployment",
             &config.webhook_deployment,
@@ -292,14 +308,14 @@ fn run_single_scenario(
 
         // Wait for rollout to complete — pods must be READY, not just created
         let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
-        println!("  Waiting for gateway rollout...");
+        output::print_action("Waiting for gateway rollout...");
         let _ = kubectl.run(&[
             "-n", &config.injection_namespace, "rollout", "status",
             &gw_deploy_path,
             &format!("--timeout={}s", config.rollout_wait_secs),
         ]);
         let wh_deploy_path = format!("deployment/{}", config.webhook_deployment);
-        println!("  Waiting for webhook rollout...");
+        output::print_action("Waiting for webhook rollout...");
         let _ = kubectl.run(&[
             "-n", &config.injection_namespace, "rollout", "status",
             &wh_deploy_path,
