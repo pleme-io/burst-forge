@@ -30,14 +30,15 @@
         type = "app";
         program = toString (pkgs.writeShellScript "burst-forge-${name}" ''
           set -euo pipefail
-          REPO_ROOT="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd || echo "${self}")"
-          # Find burst-forge binary: cargo-built or PATH
-          BIN="$REPO_ROOT/target/release/burst-forge"
-          if [ ! -x "$BIN" ]; then
-            BIN="$(command -v burst-forge 2>/dev/null || true)"
-          fi
-          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-            echo "burst-forge not found. Run: cargo build --release" >&2
+          # Find burst-forge binary: cargo-built in CWD, then PATH
+          for candidate in "./target/release/burst-forge" "$(command -v burst-forge 2>/dev/null || true)"; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+              BIN="$candidate"
+              break
+            fi
+          done
+          if [ -z "''${BIN:-}" ]; then
+            echo "burst-forge not found. Run from repo root after: cargo build --release" >&2
             exit 1
           fi
           export KUBECONFIG="''${KUBECONFIG:-$HOME/.kube/scale-test.yaml}"
