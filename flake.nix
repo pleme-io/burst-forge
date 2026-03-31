@@ -22,17 +22,27 @@
     };
 
     # Experiment flow apps — one per config file in configs/
+    # Uses cargo-built binary (Cargo.nix is stale for shikumi git dep)
     experimentApps = flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs { inherit system; };
-      binary = toolOutputs.packages.${system}.default;
 
       mkBurstApp = name: configFile: {
         type = "app";
         program = toString (pkgs.writeShellScript "burst-forge-${name}" ''
           set -euo pipefail
+          REPO_ROOT="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd || echo "${self}")"
+          # Find burst-forge binary: cargo-built or PATH
+          BIN="$REPO_ROOT/target/release/burst-forge"
+          if [ ! -x "$BIN" ]; then
+            BIN="$(command -v burst-forge 2>/dev/null || true)"
+          fi
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+            echo "burst-forge not found. Run: cargo build --release" >&2
+            exit 1
+          fi
           export KUBECONFIG="''${KUBECONFIG:-$HOME/.kube/scale-test.yaml}"
           export CONFLUENCE_API_TOKEN="''${CONFLUENCE_API_TOKEN:-$(cat "$HOME/.config/atlassian/akeyless/api-token" 2>/dev/null || echo "")}"
-          exec ${binary}/bin/burst-forge matrix --config ${configFile} "$@"
+          exec "$BIN" matrix --config ${configFile} "$@"
         '');
       };
     in {
