@@ -89,6 +89,21 @@ pub struct Config {
     /// `HelmRelease` name for the webhook.
     #[serde(default = "default_webhook_release")]
     pub webhook_release: String,
+
+    /// Injection detection mode: "sidecar" (2+ containers) or "env" (AKEYLESS_* env vars).
+    #[serde(default = "default_injection_mode")]
+    pub injection_mode: InjectionMode,
+}
+
+/// How burst-forge detects successful Akeyless secret injection.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InjectionMode {
+    /// Sidecar injection: 2+ containers indicates the Akeyless sidecar was injected.
+    Sidecar,
+    /// Environment-variable injection: `AKEYLESS_*` env vars present on any container.
+    #[default]
+    Env,
 }
 
 fn default_namespace() -> String { "scale-test".to_string() }
@@ -105,6 +120,7 @@ fn default_gateway_label() -> String { "app.kubernetes.io/name=akeyless-api-gate
 fn default_webhook_label() -> String { "app=akeyless-secrets-injection".to_string() }
 fn default_gateway_release() -> String { "akeyless-api-gateway".to_string() }
 fn default_webhook_release() -> String { "akeyless-secrets-injection".to_string() }
+fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 
 /// Discover and load config via shikumi.
 ///

@@ -10,7 +10,7 @@ pub struct BurstResult {
     pub pods_running: u32,
     pub pods_failed: u32,
     pub pods_pending: u32,
-    pub pods_with_sidecar: u32,
+    pub pods_injected: u32,
     pub injection_success_rate: f64,
     pub time_to_first_ready_ms: u64,
     pub time_to_all_ready_ms: Option<u64>,

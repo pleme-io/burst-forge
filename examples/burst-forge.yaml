@@ -25,6 +25,11 @@ webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection
 
+# Injection detection mode: "sidecar" (2+ containers) or "env" (AKEYLESS_* env vars)
+# Use "env" when using akeyless/secret-output: "env" annotation (no sidecar added)
+# Use "sidecar" when using the classic sidecar injection pattern
+injection_mode: env
+
 # EKS node group management for burst testing
 node_group:
   cluster_name: scale-test
