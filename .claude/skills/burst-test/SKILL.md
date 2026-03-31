@@ -36,6 +36,69 @@ Before running burst tests, verify:
 4. System nodes (1x t3.medium) and worker nodes (2x t3.medium) are Ready
 5. Burst nodes at 0 (burst-forge will scale them up)
 
+## 3-Phase Lifecycle Architecture
+
+Every burst (single or matrix) follows a strict 3-phase lifecycle with 5 explicit gates:
+
+```
+Phase 1: RESET      -> Gate: Zero State (deployment=0, no orphan pods)
+Phase 2: WARMUP     -> Gate: Node Ready (all burst nodes Ready)
+                    -> Gate: Image Cache (DaemonSet pods Running on all nodes)
+                    -> Gate: Infra Ready (gateway + webhook rollout complete)
+                    -> Gate: Warmup Complete (all 3 above passed)
+Phase 3: EXECUTION  -> Scale 0->N, poll injection, measure timing
+```
+
+Each gate returns a `GateResult` with expected/actual diagnostics. If any gate
+fails, the burst is aborted with a clear error (no partial/ambiguous results).
+
+Phase timing is independently measured: `reset_duration`, `warmup_duration`,
+`execution_duration` are all in the JSON output.
+
+## 9 Bottlenecks Discovered
+
+Testing at scale revealed 9 distinct bottlenecks. The tunables table below
+maps each bottleneck to the configuration knob that controls it.
+
+| # | Bottleneck | Symptom | Root Cause | Resolution |
+|---|-----------|---------|------------|------------|
+| 1 | Docker Hub rate limits | `ImagePullBackOff` at >100 pods | 100 pulls/6h anonymous | ECR mirror + Zot in-cluster cache |
+| 2 | Cold node image pull | 30-60s pod startup on new nodes | Images not pre-pulled | `image-warmup` DaemonSet + burst-forge waits for it |
+| 3 | Webhook timeout | Injection failures under load | Default 10s too short | `timeoutSeconds: 30` via postRenderers patch |
+| 4 | Gateway saturation | Slow/failed token issuance | Too few gateway replicas | Scale GW replicas per formula: `pods / 90` |
+| 5 | Webhook saturation | Pods stuck in `Init` | Too few webhook replicas | Scale webhook replicas: `pods / 75` |
+| 6 | maxSurge throttling | Pods created in waves, not simultaneously | Default 25% maxSurge | burst-forge patches `maxSurge` to replica count |
+| 7 | Namespace selector missing | Webhook deadlock (injects into own pods) | No namespace filtering | `namespaceSelector: akeyless-injection: enabled` |
+| 8 | HelmRelease drift | Gateway/webhook replicas reset after reconcile | FluxCD overrides manual patches | burst-forge patches HelmRelease `.spec.values` |
+| 9 | Node capacity | `CAPACITY LIMIT` with fewer pods than requested | Not enough burst nodes | burst-forge calculates nodes: `ceil(replicas / pods_per_node)` |
+
+## Tunables Table
+
+| Tunable | Config Key | Default | Effect |
+|---------|-----------|---------|--------|
+| Gateway replicas | `scenarios[].gateway_replicas` | per scenario | More replicas = more concurrent token issuance |
+| Webhook replicas | `scenarios[].webhook_replicas` | per scenario | More replicas = more concurrent injection |
+| Timeout | FluxCD postRenderers | 30s | Longer timeout = fewer injection failures under load |
+| Burst nodes | `node_group.max_nodes` | 20 | Hard ceiling for node scaling |
+| Pods per node | `node_group.pods_per_node` | 58 | Used to calculate required node count |
+| Injection mode | `injection_mode` | `env` | `env` (AKEYLESS_TOKEN) or `sidecar` (extra container) |
+| maxSurge | auto-patched | replicas count | Ensures all pods created simultaneously |
+| Image warmup | DaemonSet | always | Pre-pulls images to every node before burst |
+
+## Experiment Methodology
+
+Each matrix run is a controlled experiment:
+
+1. **Reset** -- `reset-all` brings the entire environment to a known zero state
+2. **Warmup** -- Nodes scaled, images pre-pulled, gateway/webhook replicas set
+3. **Execute** -- Deployment scaled 0->N atomically (maxSurge = N)
+4. **Measure** -- Poll until all pods Running or timeout, record injection rate + timing
+5. **Collect** -- JSON results with per-pod injection status, gate diagnostics, phase timing
+6. **Repeat** -- Next scenario (descending: 1000 -> 500 -> 50 for maximum initial pressure)
+
+Results are deterministic because every variable is controlled: same node count,
+same image state, same gateway/webhook replicas, same maxSurge.
+
 ## Running Burst Tests
 
 Config lives in the project repo, symlinked for shikumi discovery:
@@ -88,6 +151,25 @@ burst-forge nodes up --count 18 --kubeconfig /tmp/eks-scale-test.kubeconfig
 burst-forge nodes status --kubeconfig /tmp/eks-scale-test.kubeconfig
 burst-forge nodes down --kubeconfig /tmp/eks-scale-test.kubeconfig
 ```
+
+### Reset-All Command
+
+Full environment reset to pristine state:
+
+```bash
+burst-forge reset-all --kubeconfig /tmp/eks-scale-test.kubeconfig
+```
+
+This command:
+1. Scales `nginx-burst` deployment to 0 replicas
+2. Force-deletes any orphan pods in the namespace
+3. Resets gateway HelmRelease replicas to 1
+4. Resets webhook HelmRelease replicas to 1
+5. Scales burst node group to 0
+
+Use `reset-all` before starting a new matrix run, after a failed run, or when
+the environment is in an unknown state. The regular `reset` command only scales
+the deployment to 0 -- `reset-all` is the full teardown.
 
 ## Config Format
 
@@ -168,6 +250,35 @@ Scenarios run largest first (1000 → 50) for maximum pressure first.
 ### maxSurge
 burst-forge patches `maxSurge` to match the scenario's replica count before each burst, ensuring all pods are created simultaneously for maximum concurrent pressure on the gateway/webhook.
 
+## Confluence Reporting
+
+Matrix results are automatically published to Confluence as formatted XHTML tables:
+
+```bash
+# Publish results from the last matrix run
+burst-forge report --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Or publish a specific JSON file
+burst-forge report --input results.json
+```
+
+The report includes:
+- Scenario results table (replicas, gateway/webhook replicas, injection rate, timing)
+- Gate diagnostics for each phase
+- Per-phase timing breakdown (reset, warmup, execution)
+- Node scaling details (requested, actual, time to Ready)
+- Bottleneck analysis when injection rate < 100%
+
+Config for Confluence publishing is in the burst-forge YAML:
+```yaml
+confluence:
+  base_url: "https://your-instance.atlassian.net"
+  space_key: "ENG"
+  parent_page_id: "123456"
+```
+
+Credentials use `CONFLUENCE_USER` and `CONFLUENCE_TOKEN` environment variables.
+
 ## Nix Integration
 
 burst-forge is built with substrate's `rust-tool-release` pattern:
@@ -219,8 +330,8 @@ burst-forge burst --replicas 50 --kubeconfig /tmp/eks-scale-test.kubeconfig
 # Check results, adjust, repeat
 burst-forge burst --replicas 300 --kubeconfig /tmp/eks-scale-test.kubeconfig
 
-# Reset and teardown
-burst-forge reset --kubeconfig /tmp/eks-scale-test.kubeconfig
+# Full reset and teardown
+burst-forge reset-all --kubeconfig /tmp/eks-scale-test.kubeconfig
 burst-forge nodes down --kubeconfig /tmp/eks-scale-test.kubeconfig
 ```
 
