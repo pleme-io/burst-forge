@@ -147,6 +147,78 @@ Set `injection_mode` in config or `--injection-mode` on CLI.
 
 Formula: Gateway replicas = pods / 90 with 40% headroom.
 
+## Nix Integration
+
+burst-forge is built with substrate's `rust-tool-release` pattern:
+
+```bash
+# Run locally via Nix
+nix run github:pleme-io/burst-forge -- matrix --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Or from the repo
+cd ~/code/github/pleme-io/burst-forge
+nix run .#default -- verify --kubeconfig /tmp/eks-scale-test.kubeconfig
+```
+
+Available `nix run` apps:
+- `.#default` — burst-forge binary
+- `.#release` — GitHub release workflow
+- `.#regenerate-cargo-nix` — regenerate Cargo.nix
+
+## Fleet Orchestration
+
+burst-forge integrates with FluxCD as the fleet coordination layer. Complex workflows combine burst-forge commands with fleet state:
+
+### Full Zero-to-Results Workflow
+```bash
+# 1. Ensure FluxCD chain is healthy
+burst-forge wait --kubeconfig /tmp/eks-scale-test.kubeconfig --timeout 300
+
+# 2. Verify infrastructure (cache, gateway, webhook)
+burst-forge verify --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# 3. Scale nodes, run matrix, teardown (all-in-one)
+burst-forge matrix --kubeconfig /tmp/eks-scale-test.kubeconfig
+```
+
+### Manual Step-by-Step (for debugging)
+```bash
+# Scale nodes manually
+burst-forge nodes up --count 18 --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Wait for fleet dependencies
+burst-forge wait --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Verify everything is ready
+burst-forge verify --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Run a single burst
+burst-forge burst --replicas 50 --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Check results, adjust, repeat
+burst-forge burst --replicas 300 --kubeconfig /tmp/eks-scale-test.kubeconfig
+
+# Reset and teardown
+burst-forge reset --kubeconfig /tmp/eks-scale-test.kubeconfig
+burst-forge nodes down --kubeconfig /tmp/eks-scale-test.kubeconfig
+```
+
+### Pipeline Integration
+```bash
+# CI/CD: single command, zero manual steps
+# Config drives everything via shikumi YAML
+KUBECONFIG=/tmp/eks.kubeconfig burst-forge matrix 2>&1 | tee burst-results.json
+```
+
+The `matrix` command is the top-level orchestrator that replaces manual fleet coordination:
+1. Reads scenarios from YAML config
+2. Scales EKS node group (tagged `burst-forge=true`)
+3. Waits for FluxCD kustomizations in dependency order
+4. Validates image cache populated
+5. For each scenario: patches HelmRelease replicas → verifies → bursts → collects
+6. Outputs full JSON report
+7. Scales nodes back to 0
+
 ## Troubleshooting
 
 ### Docker Hub Rate Limits
