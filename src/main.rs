@@ -1,6 +1,6 @@
 //! burst-forge -- Kubernetes burst test orchestrator.
 //!
-//! Coordinated pod scaling with Akeyless injection verification.
+//! Coordinated pod scaling with configurable injection verification.
 //! Designed for scale testing: 0 -> N pods with real secret injection,
 //! measuring timing and scraping injection success/failure.
 

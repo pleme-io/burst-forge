@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
-use crate::config::{Config, InjectionMode};
+use crate::config::Config;
 use crate::kubectl::KubeCtl;
 use crate::types::BurstResult;
 
@@ -89,7 +89,7 @@ pub fn run_burst(
         let items = pods["items"].as_array().unwrap_or(&empty);
 
         let (running, pending, failed, injected) =
-            count_pod_states(items, &config.injection_mode);
+            count_pod_states(items, config);
 
         #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = burst_start.elapsed().as_millis() as u64;
@@ -144,7 +144,7 @@ pub fn run_burst(
     let empty = vec![];
     let items = pods["items"].as_array().unwrap_or(&empty);
     let (running, pending, failed, injected) =
-        count_pod_states(items, &config.injection_mode);
+        count_pod_states(items, config);
 
     Ok(BurstResult {
         timestamp,
@@ -165,12 +165,12 @@ pub fn run_burst(
 
 /// Count pods by phase and injection presence.
 ///
-/// Detection strategy depends on `mode`:
-/// - **Sidecar:** 2+ containers means the Akeyless sidecar was injected.
-/// - **Env:** any container has an `AKEYLESS_`-prefixed environment variable.
+/// Detection strategy depends on `injection_mode`:
+/// - **Sidecar:** 2+ containers means a sidecar was injected.
+/// - **Env:** any container has an env var matching `injection_env_prefix`.
 fn count_pod_states(
     items: &[serde_json::Value],
-    mode: &InjectionMode,
+    config: &Config,
 ) -> (u32, u32, u32, u32) {
     let mut running = 0u32;
     let mut pending = 0u32;
@@ -187,7 +187,7 @@ fn count_pod_states(
             _ => {}
         }
 
-        if has_injection(pod, mode) {
+        if has_injection(pod, config) {
             injected += 1;
         }
     }
@@ -195,26 +195,29 @@ fn count_pod_states(
     (running, pending, failed, injected)
 }
 
-/// Check whether a single pod shows evidence of Akeyless injection.
-fn has_injection(pod: &serde_json::Value, mode: &InjectionMode) -> bool {
+/// Check whether a single pod shows evidence of secret injection.
+fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
+    use crate::config::InjectionMode;
+
     let containers = pod["spec"]["containers"].as_array();
 
-    match mode {
+    match &config.injection_mode {
         InjectionMode::Sidecar => {
-            // 2+ containers indicates Akeyless sidecar injection
+            // 2+ containers indicates sidecar injection
             containers.is_some_and(|c| c.len() >= 2)
         }
         InjectionMode::Env => {
-            // Check if any container has AKEYLESS_-prefixed env vars
+            // Check if any container has env vars matching the configured prefix
             let Some(containers) = containers else {
                 return false;
             };
+            let prefix = &config.injection_env_prefix;
             containers.iter().any(|c| {
                 c["env"].as_array().is_some_and(|envs| {
                     envs.iter().any(|e| {
                         e["name"]
                             .as_str()
-                            .is_some_and(|n| n.starts_with("AKEYLESS_"))
+                            .is_some_and(|n| n.starts_with(prefix))
                     })
                 })
             })

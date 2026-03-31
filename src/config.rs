@@ -133,9 +133,9 @@ pub struct Config {
     #[serde(default)]
     pub warmup_daemonset: Option<WarmupConfig>,
 
-    /// Namespace where Akeyless gateway and webhook live.
-    #[serde(default = "default_akeyless_namespace")]
-    pub akeyless_namespace: String,
+    /// Namespace where injection gateway and webhook live.
+    #[serde(default = "default_injection_namespace")]
+    pub injection_namespace: String,
 
     /// Label selector for gateway pods.
     #[serde(default = "default_gateway_label")]
@@ -153,9 +153,21 @@ pub struct Config {
     #[serde(default = "default_webhook_release")]
     pub webhook_release: String,
 
-    /// Injection detection mode: "sidecar" (2+ containers) or "env" (AKEYLESS_* env vars).
+    /// Deployment name for the gateway (used by `kubectl scale`).
+    #[serde(default)]
+    pub gateway_deployment: String,
+
+    /// Deployment name for the webhook (used by `kubectl scale`).
+    #[serde(default)]
+    pub webhook_deployment: String,
+
+    /// Injection detection mode: "sidecar" (2+ containers) or "env" (env var prefix match).
     #[serde(default = "default_injection_mode")]
     pub injection_mode: InjectionMode,
+
+    /// Environment variable prefix used for injection detection in "env" mode.
+    #[serde(default = "default_injection_env_prefix")]
+    pub injection_env_prefix: String,
 
     /// Confluence reporting — auto-publish results after matrix run.
     #[serde(default)]
@@ -249,13 +261,13 @@ fn default_token_path() -> String {
     )
 }
 
-/// How burst-forge detects successful Akeyless secret injection.
+/// How burst-forge detects successful secret injection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum InjectionMode {
-    /// Sidecar injection: 2+ containers indicates the Akeyless sidecar was injected.
+    /// Sidecar injection: 2+ containers indicates a sidecar was injected.
     Sidecar,
-    /// Environment-variable injection: `AKEYLESS_*` env vars present on any container.
+    /// Environment-variable injection: env vars matching `injection_env_prefix` present on any container.
     #[default]
     Env,
 }
@@ -272,11 +284,12 @@ fn default_one() -> u32 { 1 }
 fn default_region() -> String { "us-east-1".to_string() }
 fn default_pods_per_node() -> u32 { 58 }
 fn default_max_nodes() -> u32 { 20 }
-fn default_akeyless_namespace() -> String { "akeyless-system".to_string() }
-fn default_gateway_label() -> String { "app.kubernetes.io/name=akeyless-api-gateway".to_string() }
-fn default_webhook_label() -> String { "app=akeyless-secrets-injection".to_string() }
-fn default_gateway_release() -> String { "akeyless-api-gateway".to_string() }
-fn default_webhook_release() -> String { "akeyless-secrets-injection".to_string() }
+fn default_injection_namespace() -> String { "injection-system".to_string() }
+fn default_gateway_label() -> String { String::new() }
+fn default_webhook_label() -> String { String::new() }
+fn default_gateway_release() -> String { String::new() }
+fn default_webhook_release() -> String { String::new() }
+fn default_injection_env_prefix() -> String { "AKEYLESS_".to_string() }
 fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 fn default_image_cache_namespace() -> String { "image-cache".to_string() }
 fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_string() }

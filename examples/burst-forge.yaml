@@ -1,5 +1,5 @@
 # burst-forge scaling matrix configuration
-# Based on historical Akeyless injection scale test data
+# Example using Akeyless injection — adapt field values for your injection system
 
 namespace: scale-test
 deployment: nginx-burst
@@ -35,27 +35,33 @@ flux:
   kustomizations:
     - infrastructure-image-cache
     - infrastructure-image-sync
-    - infrastructure-akeyless
-    - infrastructure-akeyless-injection
+    - infrastructure-injection
+    - infrastructure-injection-webhook
     - scale-test-workloads
 
-akeyless_namespace: akeyless-system
+# Injection infrastructure — configure for your injection system
+injection_namespace: akeyless-system
 gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
 webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
 
-# Injection detection mode: "sidecar" (2+ containers) or "env" (AKEYLESS_* env vars)
-# Use "env" when using akeyless/secret-output: "env" annotation (no sidecar added)
+# Injection detection mode: "sidecar" (2+ containers) or "env" (env var prefix match)
+# Use "env" when using env-var-based injection (no sidecar added)
 # Use "sidecar" when using the classic sidecar injection pattern
 injection_mode: env
+
+# Environment variable prefix for "env" injection detection (default: "AKEYLESS_")
+injection_env_prefix: "AKEYLESS_"
 
 # EKS node group management for burst testing
 node_group:
   cluster_name: scale-test
   nodegroup_name: scale-test-burst
   region: us-east-1
-  aws_profile: akeyless-development
+  aws_profile: my-aws-profile
   pods_per_node: 58
   max_nodes: 20
 
@@ -68,10 +74,10 @@ warmup_daemonset:
 # Confluence reporting — auto-publish results after matrix run
 # API token read from CONFLUENCE_API_TOKEN env var
 confluence:
-  base_url: "akeyless.atlassian.net"
-  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
-  parent_page_id: "3972595716"
-  user_email: "luis.d@akeyless.io"
+  base_url: "myorg.atlassian.net"
+  space_key: "MYSPACE"
+  parent_page_id: "12345"
+  user_email: "user@example.com"
 
 # Scaling matrix — work backwards from 1000 pods
 # Historical data: GW = pods/90 with 40% headroom

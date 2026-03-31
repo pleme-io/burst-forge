@@ -6,7 +6,7 @@ use crate::types::{ImageCacheCheck, ImageStatus, VerifyResult};
 
 /// Verify that the cluster infrastructure is ready for burst testing.
 ///
-/// Checks nodes, Akeyless gateway, injection webhook, burst deployment,
+/// Checks nodes, injection gateway, injection webhook, burst deployment,
 /// and optionally the image cache (Zot registry).
 ///
 /// # Errors
@@ -28,10 +28,10 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         anyhow::bail!("No nodes are Ready. Cluster is not usable.");
     }
 
-    // Check Akeyless gateway
+    // Check injection gateway
     let gw = kubectl.run(&[
         "-n",
-        &config.akeyless_namespace,
+        &config.injection_namespace,
         "get",
         "pods",
         "-l",
@@ -39,12 +39,12 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let gateway_replicas = gw.lines().filter(|l| l.contains("Running")).count();
-    println!("  Akeyless gateway: {gateway_replicas} Running (ns={}, label={})", config.akeyless_namespace, config.gateway_label);
+    println!("  Injection gateway: {gateway_replicas} Running (ns={}, label={})", config.injection_namespace, config.gateway_label);
 
     // Check injection webhook
     let inj = kubectl.run(&[
         "-n",
-        &config.akeyless_namespace,
+        &config.injection_namespace,
         "get",
         "pods",
         "-l",
@@ -52,7 +52,7 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let webhook_replicas = inj.lines().filter(|l| l.contains("Running")).count();
-    println!("  Injection webhook: {webhook_replicas} Running (ns={}, label={})", config.akeyless_namespace, config.webhook_label);
+    println!("  Injection webhook: {webhook_replicas} Running (ns={}, label={})", config.injection_namespace, config.webhook_label);
 
     // Check deployment exists
     let deployment_found = match kubectl.run(&[
@@ -78,18 +78,18 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
 
     if gateway_replicas == 0 {
         anyhow::bail!(
-            "Akeyless gateway has 0 running pods (ns={}, label={}). \
+            "Injection gateway has 0 running pods (ns={}, label={}). \
              Check that the gateway HelmRelease '{}' is deployed.",
-            config.akeyless_namespace,
+            config.injection_namespace,
             config.gateway_label,
             config.gateway_release,
         );
     }
     if webhook_replicas == 0 {
         anyhow::bail!(
-            "Akeyless injection webhook has 0 running pods (ns={}, label={}). \
+            "Injection webhook has 0 running pods (ns={}, label={}). \
              Check that the webhook HelmRelease '{}' is deployed.",
-            config.akeyless_namespace,
+            config.injection_namespace,
             config.webhook_label,
             config.webhook_release,
         );

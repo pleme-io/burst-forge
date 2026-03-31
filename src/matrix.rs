@@ -124,18 +124,40 @@ pub fn run_matrix(
 
     // Always attempt cleanup, regardless of scenario results
 
-    // Reset replicas to defaults after all scenarios
+    // Resume HelmReleases and reset replicas after all scenarios
     if !skip_scaling {
-        println!("\n  Resetting HelmRelease replicas...");
+        println!("\n  Resetting deployments to 1 replica...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "scale", "deployment",
+            &config.gateway_deployment, "--replicas=1",
+        ]);
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "scale", "deployment",
+            &config.webhook_deployment, "--replicas=1",
+        ]);
+
+        println!("  Resuming HelmReleases (FluxCD takes control again)...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch", "helmrelease",
+            &config.gateway_release, "--type=merge",
+            "-p", r#"{"spec":{"suspend":false}}"#,
+        ]);
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch", "helmrelease",
+            &config.webhook_release, "--type=merge",
+            "-p", r#"{"spec":{"suspend":false}}"#,
+        ]);
+
+        // Legacy cleanup path (in case old code path is hit)
         if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.akeyless_namespace,
+            &config.injection_namespace,
             &config.gateway_release,
             1,
         ) {
             eprintln!("  WARNING: Failed to reset gateway replicas: {e}");
         }
         if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.akeyless_namespace,
+            &config.injection_namespace,
             &config.webhook_release,
             1,
         ) {
@@ -187,6 +209,18 @@ pub fn run_matrix(
     Ok(report)
 }
 
+fn make_error_result(scenario: &crate::config::Scenario, error: String) -> ScenarioResult {
+    ScenarioResult {
+        name: scenario.name.clone(),
+        replicas: scenario.replicas,
+        gateway_replicas: scenario.gateway_replicas,
+        webhook_replicas: scenario.webhook_replicas,
+        verify: None,
+        burst: None,
+        error: Some(error),
+    }
+}
+
 /// Run a single scenario and capture the result.
 fn run_single_scenario(
     kubectl: &KubeCtl,
@@ -194,48 +228,70 @@ fn run_single_scenario(
     scenario: &crate::config::Scenario,
     skip_scaling: bool,
 ) -> ScenarioResult {
-    // Patch HelmRelease replicas (unless skipping)
+    // Scale infrastructure (unless skipping)
     if !skip_scaling {
-        println!("  Patching gateway replicas to {}...", scenario.gateway_replicas);
-        if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.akeyless_namespace,
-            &config.gateway_release,
-            scenario.gateway_replicas,
-        ) {
-            return ScenarioResult {
-                name: scenario.name.clone(),
-                replicas: scenario.replicas,
-                gateway_replicas: scenario.gateway_replicas,
-                webhook_replicas: scenario.webhook_replicas,
-                verify: None,
-                burst: None,
-                error: Some(format!("Failed to patch gateway replicas to {}: {e}", scenario.gateway_replicas)),
-            };
+        // Suspend HelmReleases so FluxCD doesn't revert our replica changes
+        println!("  Suspending HelmReleases (prevent FluxCD revert)...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch", "helmrelease",
+            &config.gateway_release, "--type=merge",
+            "-p", r#"{"spec":{"suspend":true}}"#,
+        ]);
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch", "helmrelease",
+            &config.webhook_release, "--type=merge",
+            "-p", r#"{"spec":{"suspend":true}}"#,
+        ]);
+
+        // Patch the underlying Deployments directly (not HelmRelease values)
+        // This avoids the FluxCD reconciliation race entirely
+        println!("  Scaling gateway to {} replicas...", scenario.gateway_replicas);
+        if let Err(e) = kubectl.run(&[
+            "-n", &config.injection_namespace, "scale", "deployment",
+            &config.gateway_deployment,
+            &format!("--replicas={}", scenario.gateway_replicas),
+        ]) {
+            return make_error_result(scenario, format!("Failed to scale gateway: {e}"));
         }
 
-        println!(
-            "  Patching webhook replicas to {}...",
-            scenario.webhook_replicas
-        );
-        if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.akeyless_namespace,
-            &config.webhook_release,
-            scenario.webhook_replicas,
-        ) {
-            return ScenarioResult {
-                name: scenario.name.clone(),
-                replicas: scenario.replicas,
-                gateway_replicas: scenario.gateway_replicas,
-                webhook_replicas: scenario.webhook_replicas,
-                verify: None,
-                burst: None,
-                error: Some(format!("Failed to patch webhook replicas to {}: {e}", scenario.webhook_replicas)),
-            };
+        println!("  Scaling webhook to {} replicas...", scenario.webhook_replicas);
+        if let Err(e) = kubectl.run(&[
+            "-n", &config.injection_namespace, "scale", "deployment",
+            &config.webhook_deployment,
+            &format!("--replicas={}", scenario.webhook_replicas),
+        ]) {
+            return make_error_result(scenario, format!("Failed to scale webhook: {e}"));
         }
 
-        // Wait for rollout
-        println!("  Waiting for rollout ({}s)...", config.rollout_wait_secs);
-        std::thread::sleep(std::time::Duration::from_secs(config.rollout_wait_secs));
+        // Wait for rollout to complete — pods must be READY, not just created
+        let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
+        println!("  Waiting for gateway rollout...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "rollout", "status",
+            &gw_deploy_path,
+            &format!("--timeout={}s", config.rollout_wait_secs),
+        ]);
+        let wh_deploy_path = format!("deployment/{}", config.webhook_deployment);
+        println!("  Waiting for webhook rollout...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "rollout", "status",
+            &wh_deploy_path,
+            &format!("--timeout={}s", config.rollout_wait_secs),
+        ]);
+
+        // Verify actual replica counts
+        let gw_ready = kubectl.run(&[
+            "-n", &config.injection_namespace, "get", "deployment",
+            &config.gateway_deployment,
+            "-o", "jsonpath={.status.readyReplicas}",
+        ]).unwrap_or_default();
+        let wh_ready = kubectl.run(&[
+            "-n", &config.injection_namespace, "get", "deployment",
+            &config.webhook_deployment,
+            "-o", "jsonpath={.status.readyReplicas}",
+        ]).unwrap_or_default();
+        println!("  Gateway ready: {gw_ready}/{}, Webhook ready: {wh_ready}/{}",
+            scenario.gateway_replicas, scenario.webhook_replicas);
     }
 
     // Verify infrastructure
