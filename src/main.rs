@@ -71,6 +71,11 @@ enum Commands {
     /// Reset deployment to 0 replicas
     Reset,
 
+    /// Reset entire environment to starting conditions
+    /// Scales deployment to 0, drains all pods, resets gateway/webhook to 1,
+    /// resumes HelmReleases, scales burst nodes to 0
+    ResetAll,
+
     /// Manage EKS node group for burst testing
     Nodes {
         #[command(subcommand)]
@@ -258,6 +263,60 @@ fn main() -> anyhow::Result<()> {
                     );
                     eprintln!("  This is expected if the deployment does not exist yet.");
                 }
+            }
+        }
+
+        Commands::ResetAll => {
+            println!("=== Resetting environment to starting conditions ===\n");
+
+            // 1. Scale deployment to 0
+            println!("  Scaling {} to 0...", cfg.deployment);
+            let _ = kubectl.run(&["-n", &cfg.namespace, "scale", "deployment", &cfg.deployment, "--replicas=0"]);
+
+            // 2. Drain all pods
+            println!("  Draining pods...");
+            let app_label = cfg.resolved_pod_label();
+            let _ = drain::wait_for_zero_pods(&kubectl, &cfg.namespace, &app_label);
+
+            // 3. Reset gateway/webhook to 1 replica
+            println!("  Resetting gateway to 1 replica...");
+            let _ = kubectl.run(&["-n", &cfg.injection_namespace, "scale", "deployment", &cfg.gateway_deployment, "--replicas=1"]);
+            println!("  Resetting webhook to 1 replica...");
+            let _ = kubectl.run(&["-n", &cfg.injection_namespace, "scale", "deployment", &cfg.webhook_deployment, "--replicas=1"]);
+
+            // 4. Resume HelmReleases
+            println!("  Resuming HelmReleases...");
+            let _ = kubectl.run(&["-n", &cfg.injection_namespace, "patch", "helmrelease", &cfg.gateway_release, "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#]);
+            let _ = kubectl.run(&["-n", &cfg.injection_namespace, "patch", "helmrelease", &cfg.webhook_release, "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#]);
+
+            // 5. Scale burst nodes to 0
+            if let Some(ng) = &cfg.node_group {
+                println!("  Scaling burst nodes to 0...");
+                let _ = nodes::scale_node_group(ng, 0);
+            }
+
+            // 6. Wait for gateway/webhook to stabilize at 1/1
+            println!("  Waiting for infrastructure to stabilize...");
+            std::thread::sleep(std::time::Duration::from_secs(30));
+
+            // 7. Verify starting conditions
+            println!("\n=== Verifying starting conditions ===\n");
+            let gw = kubectl.run(&["-n", &cfg.injection_namespace, "get", "deployment", &cfg.gateway_deployment, "-o", "jsonpath={.status.readyReplicas}/{.spec.replicas}"]).unwrap_or_default();
+            let wh = kubectl.run(&["-n", &cfg.injection_namespace, "get", "deployment", &cfg.webhook_deployment, "-o", "jsonpath={.status.readyReplicas}/{.spec.replicas}"]).unwrap_or_default();
+            let pods = drain::count_pods(&kubectl, &cfg.namespace, &app_label).unwrap_or(0);
+            let burst_nodes = if let Some(ng) = &cfg.node_group {
+                nodes::get_node_group_status(ng).map(|(d,_,_,_)| d).unwrap_or(0)
+            } else { 0 };
+
+            println!("  Gateway:     {gw}");
+            println!("  Webhook:     {wh}");
+            println!("  Burst pods:  {pods}");
+            println!("  Burst nodes: {burst_nodes}");
+
+            if pods == 0 && burst_nodes == 0 {
+                println!("\n  Starting line confirmed. Ready for burst test.");
+            } else {
+                println!("\n  WARNING: Not fully clean. Pods={pods}, Nodes={burst_nodes}");
             }
         }
 
