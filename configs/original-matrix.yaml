@@ -1,6 +1,7 @@
 # Original ASM-17540 scalability table — validates original GW/WH counts at QPS=5
 # Run: nix run .#original-matrix
 
+kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 timeout_secs: 600

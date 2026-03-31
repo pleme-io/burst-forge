@@ -1,6 +1,7 @@
 # Quick single 1000-pod experiment — for iterating on a single scenario
 # Run: nix run .#quick-1000
 
+kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 timeout_secs: 600

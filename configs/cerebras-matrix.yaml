@@ -1,8 +1,9 @@
 # Cerebras full matrix — ASM-17583
 # Customer: 2 secrets/pod, 3 shared infra nodes, QPS=5, 30s timeout
-# Run: nix run .#cerebras-matrix
-# Single scenario: nix run .#cerebras-matrix -- --scenario cerebras-300
+# Run: burst-forge flow cerebras-matrix
+# Single scenario: burst-forge flow cerebras-matrix --scenario cerebras-300
 
+kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 timeout_secs: 600

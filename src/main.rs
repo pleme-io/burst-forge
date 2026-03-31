@@ -90,6 +90,23 @@ enum Commands {
         #[arg(long)]
         json: String,
     },
+
+    /// Run a named flow from configs/ directory
+    ///
+    /// Discovers config files at `configs/{name}.yaml` relative to CWD.
+    /// Equivalent to `matrix --config configs/{name}.yaml`.
+    Flow {
+        /// Flow name (maps to configs/{name}.yaml)
+        name: String,
+
+        /// Run only a specific scenario by name
+        #[arg(long)]
+        scenario: Option<String>,
+
+        /// Skip `HelmRelease` replica patching
+        #[arg(long)]
+        skip_scaling: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -113,13 +130,43 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let cfg = config::discover(cli.config.as_deref())?;
-    let kubectl = KubeCtl::new(cli.kubeconfig.clone());
+
+    // Resolve config path: --config flag, or flow name → configs/{name}.yaml
+    let config_path = match &cli.command {
+        Commands::Flow { name, .. } => {
+            let path = format!("configs/{name}.yaml");
+            if !std::path::Path::new(&path).exists() {
+                anyhow::bail!(
+                    "Flow config not found: {path}\n\
+                     Available flows: {}",
+                    list_flows().unwrap_or_else(|_| "none".to_string())
+                );
+            }
+            Some(path)
+        }
+        _ => cli.config.clone(),
+    };
+
+    let cfg = config::discover(config_path.as_deref())?;
+
+    // Config-level kubeconfig overrides CLI/env. Expand ~ to home dir.
+    let kubeconfig = cfg.kubeconfig.clone()
+        .or_else(|| cli.kubeconfig.clone())
+        .map(|p| {
+            if p.starts_with("~/") {
+                dirs::home_dir()
+                    .map(|h| h.join(&p[2..]).to_string_lossy().to_string())
+                    .unwrap_or(p)
+            } else {
+                p
+            }
+        });
+    let kubectl = KubeCtl::new(kubeconfig.clone());
 
     // Signal handler: graceful cleanup on Ctrl+C
     // Force-deletes burst pods, waits briefly for drain, then scales nodes to 0
     let cleanup_cfg = cfg.clone();
-    let cleanup_kubeconfig = cli.kubeconfig.clone();
+    let cleanup_kubeconfig = kubeconfig.clone();
     ctrlc::set_handler(move || {
         output::print_sigint_header();
         let kctl = KubeCtl::new(cleanup_kubeconfig.clone());
@@ -397,9 +444,40 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+
+        Commands::Flow {
+            name: _,
+            scenario,
+            skip_scaling,
+        } => {
+            // Config already resolved via flow name → configs/{name}.yaml
+            output::print_banner(&format!("Flow: {}", config_path.as_deref().unwrap_or("?")));
+            let matrix_report =
+                matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling)?;
+
+            output::print_phase("Matrix Report");
+            println!("{}", serde_json::to_string_pretty(&matrix_report)?);
+
+            if let Some(conf) = &cfg.confluence {
+                publish_report(conf, &matrix_report, &cfg)?;
+            }
+        }
     }
 
     Ok(())
+}
+
+/// List available flow configs from `configs/` directory.
+fn list_flows() -> anyhow::Result<String> {
+    let entries = std::fs::read_dir("configs")?;
+    let names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".yaml").map(String::from)
+        })
+        .collect();
+    Ok(names.join(", "))
 }
 
 /// Generate and publish a report to Confluence.

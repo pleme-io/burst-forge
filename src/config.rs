@@ -119,6 +119,12 @@ pub struct Config {
     #[serde(default = "default_node_poll_interval")]
     pub node_poll_interval_secs: u64,
 
+    /// Kubeconfig path override. When set, burst-forge uses this instead of
+    /// the `--kubeconfig` CLI flag or `KUBECONFIG` env var.
+    /// This keeps the kubeconfig in the declarative config alongside everything else.
+    #[serde(default)]
+    pub kubeconfig: Option<String>,
+
     /// Seconds to wait after image warmup for IPAMD to attach secondary ENIs.
     /// Custom networking requires 2-3 minutes for ENI setup on new nodes.
     /// Set to 0 to skip (default). Recommended: 150 for custom networking.

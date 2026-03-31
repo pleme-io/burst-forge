@@ -2,6 +2,7 @@
 # GW formula: ~1 GW per 91 pods for fast injection
 # Run: nix run .#optimized-matrix
 
+kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 timeout_secs: 600
