@@ -1,5 +1,6 @@
 //! Report generation and Confluence publishing.
 
+use std::fmt::Write;
 use std::process::Command;
 
 use anyhow::{Context, bail};
@@ -21,12 +22,13 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
 
     // Executive summary
     html.push_str("<h2>Executive Summary</h2>");
-    html.push_str(&format!(
+    let _ = write!(
+        html,
         "<p><strong>Status:</strong> {status} | \
          <strong>Scenarios:</strong> {total} | \
          <strong>Passed:</strong> {passed} | \
          <strong>Failed:</strong> {failed}</p>"
-    ));
+    );
 
     // Per-scenario table
     html.push_str("<h2>Scenario Results</h2>");
@@ -61,11 +63,12 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
         );
         let error = s.error.as_deref().unwrap_or("-");
 
-        html.push_str(&format!(
+        let _ = write!(
+            html,
             "<tr><td>{}</td><td>{}</td><td>{pods}</td><td>{rate}</td>\
              <td>{first}</td><td>{all}</td><td>{error}</td></tr>",
             s.name, s.replicas
-        ));
+        );
     }
 
     html.push_str("</tbody></table>");
@@ -84,40 +87,37 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
             .burst
             .as_ref()
             .map_or_else(|| "-".to_string(), |b| b.nodes.to_string());
-        html.push_str(&format!(
+        let _ = write!(
+            html,
             "<tr><td>{}</td><td>{nodes}</td><td>{}</td><td>{}</td></tr>",
             s.name, s.gateway_replicas, s.webhook_replicas
-        ));
+        );
     }
 
     html.push_str("</tbody></table>");
 
     // Configuration
     html.push_str("<h2>Configuration</h2>");
-    html.push_str(&format!(
+    let _ = write!(
+        html,
         "<ul>\
          <li><strong>Namespace:</strong> {}</li>\
          <li><strong>Deployment:</strong> {}</li>\
          <li><strong>Injection Mode:</strong> {:?}</li>\
          </ul>",
         config.namespace, config.deployment, config.injection_mode
-    ));
+    );
 
     // Raw JSON
     html.push_str("<h2>Raw Data</h2>");
     let json = serde_json::to_string_pretty(report).unwrap_or_default();
-    let escaped = json
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    html.push_str(&format!(
+    let _ = write!(
+        html,
         "<ac:structured-macro ac:name=\"code\">\
          <ac:parameter ac:name=\"language\">json</ac:parameter>\
          <ac:plain-text-body><![CDATA[{json}]]></ac:plain-text-body>\
          </ac:structured-macro>"
-    ));
-    // Also include a plain <pre> fallback in case the macro is not supported
-    let _ = escaped; // used below only if we switch to plain pre
+    );
 
     (title, html)
 }
@@ -137,7 +137,7 @@ pub fn publish_to_confluence(
     title: &str,
     content: &str,
 ) -> anyhow::Result<String> {
-    // Token discovery: env var → configured token_path
+    // Token discovery: env var -> configured token_path
     let token = std::env::var("CONFLUENCE_API_TOKEN").ok().or_else(|| {
         std::fs::read_to_string(&conf.token_path).ok().map(|s| s.trim().to_string())
     }).with_context(|| format!(
@@ -209,8 +209,10 @@ pub fn publish_to_confluence(
     let page_url = resp["_links"]["base"]
         .as_str()
         .zip(resp["_links"]["webui"].as_str())
-        .map(|(base, webui)| format!("{base}{webui}"))
-        .unwrap_or_else(|| format!("https://{}/wiki", conf.base_url));
+        .map_or_else(
+            || format!("https://{}/wiki", conf.base_url),
+            |(base, webui)| format!("{base}{webui}"),
+        );
 
     Ok(page_url)
 }
@@ -219,7 +221,7 @@ pub fn publish_to_confluence(
 fn base64_encode(input: &str) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
-    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(bytes.len().div_ceil(3) * 4);
 
     for chunk in bytes.chunks(3) {
         let b0 = u32::from(chunk[0]);

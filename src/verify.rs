@@ -21,6 +21,13 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
     let ready_nodes = nodes.lines().filter(|l| l.contains("Ready")).count();
     println!("  Nodes: {ready_nodes}/{node_count} Ready");
 
+    if node_count == 0 {
+        anyhow::bail!("No nodes found in cluster. Is kubeconfig correct?");
+    }
+    if ready_nodes == 0 {
+        anyhow::bail!("No nodes are Ready. Cluster is not usable.");
+    }
+
     // Check Akeyless gateway
     let gw = kubectl.run(&[
         "-n",
@@ -32,7 +39,7 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let gateway_replicas = gw.lines().filter(|l| l.contains("Running")).count();
-    println!("  Akeyless gateway: {gateway_replicas} Running");
+    println!("  Akeyless gateway: {gateway_replicas} Running (ns={}, label={})", config.akeyless_namespace, config.gateway_label);
 
     // Check injection webhook
     let inj = kubectl.run(&[
@@ -45,7 +52,7 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
         "--no-headers",
     ])?;
     let webhook_replicas = inj.lines().filter(|l| l.contains("Running")).count();
-    println!("  Injection webhook: {webhook_replicas} Running");
+    println!("  Injection webhook: {webhook_replicas} Running (ns={}, label={})", config.akeyless_namespace, config.webhook_label);
 
     // Check deployment exists
     let deployment_found = match kubectl.run(&[
@@ -69,9 +76,22 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
     // Check image cache if configured
     let image_cache = check_image_cache(kubectl, config);
 
-    if gateway_replicas == 0 || webhook_replicas == 0 {
+    if gateway_replicas == 0 {
         anyhow::bail!(
-            "Infrastructure not ready: gateway={gateway_replicas}, webhook={webhook_replicas}"
+            "Akeyless gateway has 0 running pods (ns={}, label={}). \
+             Check that the gateway HelmRelease '{}' is deployed.",
+            config.akeyless_namespace,
+            config.gateway_label,
+            config.gateway_release,
+        );
+    }
+    if webhook_replicas == 0 {
+        anyhow::bail!(
+            "Akeyless injection webhook has 0 running pods (ns={}, label={}). \
+             Check that the webhook HelmRelease '{}' is deployed.",
+            config.akeyless_namespace,
+            config.webhook_label,
+            config.webhook_release,
         );
     }
 
@@ -90,24 +110,27 @@ pub fn verify_infra(kubectl: &KubeCtl, config: &Config) -> anyhow::Result<Verify
 
 /// Check the image cache (Zot registry) for required images.
 ///
-/// Runs `kubectl exec` into a Zot pod and queries the registry API.
+/// Uses config-driven namespace and label selector.
 fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheCheck> {
-    let registry = config.cache_registry.as_ref()?.clone();
+    let registry = config.resolved_cache_registry()?;
 
     if config.required_images.is_empty() {
         return None;
     }
 
-    println!("  Checking image cache ({registry})...");
+    let ic_namespace = config.image_cache_namespace();
+    let ic_label = config.image_cache_label();
+
+    println!("  Checking image cache ({registry}) in ns={ic_namespace} label={ic_label}...");
 
     // Find a Zot pod
     let zot_pods = kubectl.run(&[
         "-n",
-        "image-cache",
+        &ic_namespace,
         "get",
         "pods",
         "-l",
-        "app.kubernetes.io/name=zot",
+        &ic_label,
         "--no-headers",
         "-o",
         "custom-columns=NAME:.metadata.name,STATUS:.status.phase",
@@ -125,7 +148,7 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
     };
 
     let Some(pod_name) = zot_pod else {
-        println!("    No Zot pod found, skipping image cache check");
+        println!("    No Zot pod found in {ic_namespace} (label={ic_label}), skipping image cache check");
         return Some(ImageCacheCheck {
             registry,
             images: config
@@ -151,7 +174,7 @@ fn check_image_cache(kubectl: &KubeCtl, config: &Config) -> Option<ImageCacheChe
         // Query the Zot registry API via kubectl exec
         let result = kubectl.run(&[
             "-n",
-            "image-cache",
+            &ic_namespace,
             "exec",
             &pod_name,
             "--",

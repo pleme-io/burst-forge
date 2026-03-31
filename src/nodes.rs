@@ -27,7 +27,7 @@ pub fn scale_node_group(config: &NodeGroupConfig, desired: u32) -> anyhow::Resul
 
     let scaling_config = format!(
         "minSize={min},maxSize={max},desiredSize={desired}",
-        min = if desired == 0 { 0 } else { 1 },
+        min = u32::from(desired != 0),
         max = config.max_nodes,
     );
 
@@ -64,7 +64,7 @@ pub fn scale_node_group(config: &NodeGroupConfig, desired: u32) -> anyhow::Resul
 
 /// Wait until the desired number of nodes are in Ready state.
 ///
-/// Polls `kubectl get nodes` at 15-second intervals until the desired count
+/// Polls `kubectl get nodes` at the given interval until the desired count
 /// of Ready nodes is reached or the timeout expires.
 ///
 /// # Errors
@@ -74,16 +74,18 @@ pub fn wait_for_nodes(
     kubectl: &KubeCtl,
     desired: u32,
     timeout: Duration,
+    poll_interval: Duration,
 ) -> anyhow::Result<()> {
-    println!("  Waiting for {desired} nodes to be Ready (timeout: {}s)...", timeout.as_secs());
+    println!("  Waiting for {desired} nodes to be Ready (timeout: {}s, poll: {}s)...",
+        timeout.as_secs(), poll_interval.as_secs());
 
     let start = Instant::now();
-    let poll_interval = Duration::from_secs(15);
 
     loop {
         if start.elapsed() > timeout {
+            let ready = count_ready_nodes(kubectl).unwrap_or(0);
             anyhow::bail!(
-                "Timeout waiting for {desired} Ready nodes after {}s",
+                "Timeout waiting for {desired} Ready nodes after {}s (currently {ready} ready)",
                 timeout.as_secs()
             );
         }
@@ -110,8 +112,7 @@ pub fn calculate_nodes(replicas: u32, pods_per_node: u32) -> u32 {
     if pods_per_node == 0 {
         return 1;
     }
-    // Ceiling division
-    let base = (replicas + pods_per_node - 1) / pods_per_node;
+    let base = replicas.div_ceil(pods_per_node);
     // One headroom node
     base + 1
 }
@@ -201,9 +202,9 @@ pub fn get_node_group_status(
     Ok((desired as u32, min as u32, max as u32, status))
 }
 
-/// Wait for an image-warmup DaemonSet to be fully rolled out.
+/// Wait for an image-warmup `DaemonSet` to be fully rolled out.
 ///
-/// Polls until all desired pods in the DaemonSet are ready, ensuring
+/// Polls until all desired pods in the `DaemonSet` are ready, ensuring
 /// images are pre-pulled on every node.
 ///
 /// # Errors

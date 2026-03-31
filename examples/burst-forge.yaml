@@ -6,18 +6,38 @@ deployment: nginx-burst
 timeout_secs: 600
 poll_interval_secs: 5
 
-cache_registry: "image-cache.image-cache.svc.cluster.local:5000"
+# Cooldown seconds between matrix scenarios (default: 10)
+cooldown_secs: 10
+
+# Seconds to wait for HelmRelease rollout after patching replicas (default: 30)
+rollout_wait_secs: 30
+
+# Node readiness poll interval in seconds (default: 15)
+node_poll_interval_secs: 15
+
+# Pod label selector override (default: app={deployment})
+# pod_label: "app=nginx-burst"
+
+# Image cache (Zot registry) configuration
+image_cache:
+  namespace: image-cache
+  label: "app.kubernetes.io/name=zot"
+  registry: "image-cache.image-cache.svc.cluster.local:5000"
+
 required_images:
   - "akeyless/k8s-secrets-sidecar:0.35.1"
   - "akeyless/k8s-webhook-server:latest"
   - "library/nginx:1.27-alpine"
 
-flux_kustomizations:
-  - infrastructure-image-cache
-  - infrastructure-image-sync
-  - infrastructure-akeyless
-  - infrastructure-akeyless-injection
-  - scale-test-workloads
+# FluxCD kustomization wait configuration
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-image-sync
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
 
 akeyless_namespace: akeyless-system
 gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
@@ -38,6 +58,12 @@ node_group:
   aws_profile: akeyless-development
   pods_per_node: 58
   max_nodes: 20
+
+# DaemonSet warmup — wait for image pre-pull after node scale-up
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
 
 # Confluence reporting — auto-publish results after matrix run
 # API token read from CONFLUENCE_API_TOKEN env var

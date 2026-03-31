@@ -14,6 +14,7 @@ use crate::kubectl::KubeCtl;
 /// Returns an error if any kustomization does not reach Ready within the timeout.
 pub fn wait_for_kustomizations(
     kubectl: &KubeCtl,
+    flux_namespace: &str,
     kustomizations: &[String],
     timeout_secs: u64,
     poll_interval_secs: u64,
@@ -27,7 +28,7 @@ pub fn wait_for_kustomizations(
     let poll = Duration::from_secs(poll_interval_secs);
 
     println!(
-        "Waiting for {} kustomizations (timeout: {timeout_secs}s)...",
+        "Waiting for {} kustomizations in namespace {flux_namespace} (timeout: {timeout_secs}s)...",
         kustomizations.len()
     );
 
@@ -37,10 +38,12 @@ pub fn wait_for_kustomizations(
 
         loop {
             if start.elapsed() > timeout {
-                anyhow::bail!("Timeout waiting for kustomization {ks_name} to become Ready");
+                anyhow::bail!(
+                    "Timeout waiting for kustomization {flux_namespace}/{ks_name} to become Ready after {timeout_secs}s"
+                );
             }
 
-            match check_kustomization_ready(kubectl, ks_name) {
+            match check_kustomization_ready(kubectl, flux_namespace, ks_name) {
                 Ok(true) => {
                     let elapsed = start.elapsed().as_secs();
                     println!("  {ks_name}: Ready ({elapsed}s)");
@@ -61,10 +64,10 @@ pub fn wait_for_kustomizations(
 }
 
 /// Check if a single kustomization has Ready=True.
-fn check_kustomization_ready(kubectl: &KubeCtl, name: &str) -> anyhow::Result<bool> {
+fn check_kustomization_ready(kubectl: &KubeCtl, namespace: &str, name: &str) -> anyhow::Result<bool> {
     let json = kubectl.get_json(&[
         "-n",
-        "flux-system",
+        namespace,
         "get",
         "kustomization",
         name,

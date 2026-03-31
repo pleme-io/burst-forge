@@ -99,6 +99,7 @@ enum NodesAction {
     Status,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
@@ -113,9 +114,12 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Wait => {
+            let kustomizations = cfg.resolved_flux_kustomizations();
+            let flux_ns = cfg.flux_namespace();
             flux::wait_for_kustomizations(
                 &kubectl,
-                &cfg.flux_kustomizations,
+                &flux_ns,
+                kustomizations,
                 cfg.timeout_secs,
                 cfg.poll_interval_secs,
             )?;
@@ -147,8 +151,8 @@ fn main() -> anyhow::Result<()> {
                 results.push(result);
 
                 if i < iterations {
-                    println!("\n  Cooling down 10s...");
-                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    println!("\n  Cooling down {}s...", cfg.cooldown_secs);
+                    std::thread::sleep(std::time::Duration::from_secs(cfg.cooldown_secs));
                 }
             }
 
@@ -165,22 +169,31 @@ fn main() -> anyhow::Result<()> {
             println!("\n=== MATRIX REPORT ===");
             println!("{}", serde_json::to_string_pretty(&matrix_report)?);
 
-            // Auto-publish to Confluence if configured
+            // Publish to Confluence if configured — failure is fatal
             if let Some(conf) = &cfg.confluence {
-                publish_report(conf, &matrix_report, &cfg);
+                publish_report(conf, &matrix_report, &cfg)?;
             }
         }
 
         Commands::Reset => {
-            kubectl.run(&[
+            // Idempotent reset: ignore errors from missing deployments
+            match kubectl.run(&[
                 "-n",
                 &cfg.namespace,
                 "scale",
                 "deployment",
                 &cfg.deployment,
                 "--replicas=0",
-            ])?;
-            println!("Reset {} to 0 replicas", cfg.deployment);
+            ]) {
+                Ok(_) => println!("Reset {} to 0 replicas", cfg.deployment),
+                Err(e) => {
+                    eprintln!(
+                        "WARNING: Could not reset deployment {}/{}: {e}",
+                        cfg.namespace, cfg.deployment,
+                    );
+                    eprintln!("  This is expected if the deployment does not exist yet.");
+                }
+            }
         }
 
         Commands::Report { json } => {
@@ -190,10 +203,12 @@ fn main() -> anyhow::Result<()> {
                 )
             })?;
 
-            let data = std::fs::read_to_string(&json)?;
-            let matrix_report: types::MatrixReport = serde_json::from_str(&data)?;
+            let data = std::fs::read_to_string(&json)
+                .map_err(|e| anyhow::anyhow!("Failed to read results file '{json}': {e}"))?;
+            let matrix_report: types::MatrixReport = serde_json::from_str(&data)
+                .map_err(|e| anyhow::anyhow!("Failed to parse results JSON from '{json}': {e}"))?;
 
-            publish_report(conf, &matrix_report, &cfg);
+            publish_report(conf, &matrix_report, &cfg)?;
         }
 
         Commands::Nodes { action } => {
@@ -210,6 +225,7 @@ fn main() -> anyhow::Result<()> {
                         &kubectl,
                         count,
                         std::time::Duration::from_secs(cfg.timeout_secs),
+                        std::time::Duration::from_secs(cfg.node_poll_interval_secs),
                     )?;
                     nodes::tag_nodes(&kubectl, "burst-forge=true")?;
                     println!("Node group scaled to {count} nodes");
@@ -240,15 +256,19 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Generate and publish a report to Confluence.
+///
+/// # Errors
+///
+/// Returns an error if publishing to Confluence fails.
 fn publish_report(
     conf: &config::ConfluenceConfig,
     matrix_report: &types::MatrixReport,
     cfg: &config::Config,
-) {
+) -> anyhow::Result<()> {
     let (title, content) = report::generate_report(matrix_report, cfg);
     println!("\n=== Publishing to Confluence ===");
-    match report::publish_to_confluence(conf, &title, &content) {
-        Ok(url) => println!("  Published: {url}"),
-        Err(e) => println!("  WARNING: Failed to publish to Confluence: {e}"),
-    }
+    let url = report::publish_to_confluence(conf, &title, &content)
+        .map_err(|e| anyhow::anyhow!("FATAL: Failed to publish results to Confluence: {e}"))?;
+    println!("  Published: {url}");
+    Ok(())
 }

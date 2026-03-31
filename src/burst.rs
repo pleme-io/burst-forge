@@ -55,7 +55,7 @@ pub fn run_burst(
     let mut first_ready_time: Option<u64> = None;
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
     let timeout_duration = Duration::from_secs(config.timeout_secs);
-    let app_label = format!("app={}", config.deployment);
+    let app_label = config.resolved_pod_label();
 
     loop {
         if burst_start.elapsed() > timeout_duration {
@@ -189,7 +189,7 @@ fn has_injection(pod: &serde_json::Value, mode: &InjectionMode) -> bool {
     match mode {
         InjectionMode::Sidecar => {
             // 2+ containers indicates Akeyless sidecar injection
-            containers.map_or(false, |c| c.len() >= 2)
+            containers.is_some_and(|c| c.len() >= 2)
         }
         InjectionMode::Env => {
             // Check if any container has AKEYLESS_-prefixed env vars

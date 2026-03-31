@@ -15,7 +15,14 @@ use crate::verify;
 ///
 /// # Errors
 ///
-/// Returns an error if resetting replicas after all scenarios fails.
+/// Returns an error if:
+/// - No scenarios are configured or matched
+/// - Node scaling fails
+/// - `DaemonSet` warmup fails (when configured)
+/// - All scenarios completed but any had errors
+///
+/// Node scale-down is always attempted in cleanup, even on error.
+#[allow(clippy::too_many_lines)]
 pub fn run_matrix(
     kubectl: &KubeCtl,
     config: &Config,
@@ -43,7 +50,7 @@ pub fn run_matrix(
         );
     }
 
-    // Scale up node group if configured
+    // Scale up node group if configured — failure is fatal
     if let Some(ng) = &config.node_group {
         let max_nodes_needed = scenarios
             .iter()
@@ -56,19 +63,36 @@ pub fn run_matrix(
             .min(ng.max_nodes);
 
         println!("\n=== Node Group Pre-Heat: {max_nodes_needed} nodes ===\n");
-        nodes::scale_node_group(ng, max_nodes_needed)?;
-        nodes::wait_for_nodes(kubectl, max_nodes_needed, Duration::from_secs(config.timeout_secs))?;
+
+        // Node scaling failure is fatal — cannot run burst tests without nodes
+        nodes::scale_node_group(ng, max_nodes_needed)
+            .map_err(|e| anyhow::anyhow!("FATAL: Failed to scale node group to {max_nodes_needed}: {e}"))?;
+
+        nodes::wait_for_nodes(
+            kubectl,
+            max_nodes_needed,
+            Duration::from_secs(config.timeout_secs),
+            Duration::from_secs(config.node_poll_interval_secs),
+        )
+        .map_err(|e| anyhow::anyhow!("FATAL: Nodes did not become ready: {e}"))?;
+
         nodes::tag_nodes(kubectl, "burst-forge=true")?;
 
-        // Wait for image-warmup DaemonSet if image cache is configured
-        if config.cache_registry.is_some() {
-            // Best-effort wait for image-warmup DaemonSet — non-fatal if not found
-            let _ = nodes::wait_for_daemonset_ready(
+        // Wait for warmup DaemonSet if configured — failure is fatal
+        if let Some(warmup) = &config.warmup_daemonset {
+            println!("\n=== Waiting for warmup DaemonSet {}/{}  ===\n", warmup.namespace, warmup.name);
+            nodes::wait_for_daemonset_ready(
                 kubectl,
-                "image-cache",
-                "image-warmup",
-                Duration::from_secs(300),
-            );
+                &warmup.namespace,
+                &warmup.name,
+                Duration::from_secs(warmup.timeout_secs),
+            )
+            .map_err(|e| anyhow::anyhow!(
+                "FATAL: Warmup DaemonSet {}/{} did not become ready within {}s: {e}",
+                warmup.namespace,
+                warmup.name,
+                warmup.timeout_secs,
+            ))?;
         }
     }
 
@@ -79,7 +103,7 @@ pub fn run_matrix(
 
     let mut results = Vec::new();
 
-    for scenario in &scenarios {
+    for (i, scenario) in scenarios.iter().enumerate() {
         println!(
             "\n--- Scenario: {} (replicas={}, gw={}, wh={}) ---",
             scenario.name,
@@ -91,38 +115,76 @@ pub fn run_matrix(
         let result = run_single_scenario(kubectl, config, scenario, skip_scaling);
         results.push(result);
 
-        // Cool down between scenarios
-        println!("\n  Cooling down 10s...");
-        std::thread::sleep(std::time::Duration::from_secs(10));
+        // Cool down between scenarios (skip after last)
+        if i < scenarios.len() - 1 {
+            println!("\n  Cooling down {}s...", config.cooldown_secs);
+            std::thread::sleep(std::time::Duration::from_secs(config.cooldown_secs));
+        }
     }
+
+    // Always attempt cleanup, regardless of scenario results
 
     // Reset replicas to defaults after all scenarios
     if !skip_scaling {
         println!("\n  Resetting HelmRelease replicas...");
-        let _ = kubectl.patch_helmrelease_replicas(
+        if let Err(e) = kubectl.patch_helmrelease_replicas(
             &config.akeyless_namespace,
             &config.gateway_release,
             1,
-        );
-        let _ = kubectl.patch_helmrelease_replicas(
+        ) {
+            eprintln!("  WARNING: Failed to reset gateway replicas: {e}");
+        }
+        if let Err(e) = kubectl.patch_helmrelease_replicas(
             &config.akeyless_namespace,
             &config.webhook_release,
             1,
-        );
-    }
-
-    // Scale node group back to 0 after all scenarios
-    if let Some(ng) = &config.node_group {
-        println!("\n=== Scaling node group back to 0 ===\n");
-        if let Err(e) = nodes::scale_node_group(ng, 0) {
-            println!("  WARNING: Failed to scale down node group: {e}");
+        ) {
+            eprintln!("  WARNING: Failed to reset webhook replicas: {e}");
         }
     }
 
-    Ok(MatrixReport {
+    // Scale node group back to 0 after all scenarios — always attempt
+    if let Some(ng) = &config.node_group {
+        println!("\n=== Scaling node group back to 0 ===\n");
+        if let Err(e) = nodes::scale_node_group(ng, 0) {
+            eprintln!("  WARNING: Failed to scale down node group: {e}");
+        }
+    }
+
+    // Check if any scenario had errors — collect failure info before moving results
+    let failure_count = results.iter().filter(|r| r.error.is_some()).count();
+    let total_count = results.len();
+    let failure_summary: Vec<String> = results
+        .iter()
+        .filter(|r| r.error.is_some())
+        .map(|r| {
+            format!(
+                "  - {}: {}",
+                r.name,
+                r.error.as_deref().unwrap_or("unknown error")
+            )
+        })
+        .collect();
+
+    let report = MatrixReport {
         timestamp,
         scenarios: results,
-    })
+    };
+
+    if failure_count > 0 {
+        // Still print the report JSON so the caller has the data
+        println!("\n=== MATRIX REPORT (with failures) ===");
+        if let Ok(json) = serde_json::to_string_pretty(&report) {
+            println!("{json}");
+        }
+
+        anyhow::bail!(
+            "Matrix completed with {failure_count}/{total_count} scenario failures:\n{}",
+            failure_summary.join("\n")
+        );
+    }
+
+    Ok(report)
 }
 
 /// Run a single scenario and capture the result.
@@ -147,7 +209,7 @@ fn run_single_scenario(
                 webhook_replicas: scenario.webhook_replicas,
                 verify: None,
                 burst: None,
-                error: Some(format!("Failed to patch gateway: {e}")),
+                error: Some(format!("Failed to patch gateway replicas to {}: {e}", scenario.gateway_replicas)),
             };
         }
 
@@ -167,13 +229,13 @@ fn run_single_scenario(
                 webhook_replicas: scenario.webhook_replicas,
                 verify: None,
                 burst: None,
-                error: Some(format!("Failed to patch webhook: {e}")),
+                error: Some(format!("Failed to patch webhook replicas to {}: {e}", scenario.webhook_replicas)),
             };
         }
 
         // Wait for rollout
-        println!("  Waiting for rollout (30s)...");
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        println!("  Waiting for rollout ({}s)...", config.rollout_wait_secs);
+        std::thread::sleep(std::time::Duration::from_secs(config.rollout_wait_secs));
     }
 
     // Verify infrastructure
