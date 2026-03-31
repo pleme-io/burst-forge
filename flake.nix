@@ -41,7 +41,8 @@
             echo "burst-forge not found. Run from repo root after: cargo build --release" >&2
             exit 1
           fi
-          export KUBECONFIG="''${KUBECONFIG:-$HOME/.kube/scale-test.yaml}"
+          # Override KUBECONFIG for scale-test (shell default includes credentials path that may not exist)
+          export KUBECONFIG="''${BURST_FORGE_KUBECONFIG:-$HOME/.kube/scale-test.yaml}"
           export CONFLUENCE_API_TOKEN="''${CONFLUENCE_API_TOKEN:-$(cat "$HOME/.config/atlassian/akeyless/api-token" 2>/dev/null || echo "")}"
           exec "$BIN" matrix --config ${configFile} "$@"
         '');
