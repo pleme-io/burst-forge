@@ -93,6 +93,23 @@ pub struct Config {
     /// Injection detection mode: "sidecar" (2+ containers) or "env" (AKEYLESS_* env vars).
     #[serde(default = "default_injection_mode")]
     pub injection_mode: InjectionMode,
+
+    /// Confluence reporting — auto-publish results after matrix run.
+    #[serde(default)]
+    pub confluence: Option<ConfluenceConfig>,
+}
+
+/// Confluence reporting configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfluenceConfig {
+    /// Confluence base URL (e.g. "akeyless.atlassian.net")
+    pub base_url: String,
+    /// Space key for reports
+    pub space_key: String,
+    /// Parent page ID — reports created as children
+    pub parent_page_id: String,
+    /// User email for Basic auth
+    pub user_email: String,
 }
 
 /// How burst-forge detects successful Akeyless secret injection.

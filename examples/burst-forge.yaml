@@ -39,6 +39,14 @@ node_group:
   pods_per_node: 58
   max_nodes: 20
 
+# Confluence reporting — auto-publish results after matrix run
+# API token read from CONFLUENCE_API_TOKEN env var
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+
 # Scaling matrix — work backwards from 1000 pods
 # Historical data: GW = pods/90 with 40% headroom
 scenarios:

@@ -10,6 +10,7 @@ mod flux;
 mod kubectl;
 mod matrix;
 mod nodes;
+mod report;
 mod types;
 mod verify;
 
@@ -72,6 +73,13 @@ enum Commands {
     Nodes {
         #[command(subcommand)]
         action: NodesAction,
+    },
+
+    /// Publish a JSON results file to Confluence
+    Report {
+        /// Path to the matrix results JSON file
+        #[arg(long)]
+        json: String,
     },
 }
 
@@ -152,10 +160,15 @@ fn main() -> anyhow::Result<()> {
             scenario,
             skip_scaling,
         } => {
-            let report =
+            let matrix_report =
                 matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling)?;
             println!("\n=== MATRIX REPORT ===");
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            println!("{}", serde_json::to_string_pretty(&matrix_report)?);
+
+            // Auto-publish to Confluence if configured
+            if let Some(conf) = &cfg.confluence {
+                publish_report(conf, &matrix_report, &cfg);
+            }
         }
 
         Commands::Reset => {
@@ -168,6 +181,19 @@ fn main() -> anyhow::Result<()> {
                 "--replicas=0",
             ])?;
             println!("Reset {} to 0 replicas", cfg.deployment);
+        }
+
+        Commands::Report { json } => {
+            let conf = cfg.confluence.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No confluence section configured. Add confluence to your burst-forge.yaml config."
+                )
+            })?;
+
+            let data = std::fs::read_to_string(&json)?;
+            let matrix_report: types::MatrixReport = serde_json::from_str(&data)?;
+
+            publish_report(conf, &matrix_report, &cfg);
         }
 
         Commands::Nodes { action } => {
@@ -211,4 +237,18 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Generate and publish a report to Confluence.
+fn publish_report(
+    conf: &config::ConfluenceConfig,
+    matrix_report: &types::MatrixReport,
+    cfg: &config::Config,
+) {
+    let (title, content) = report::generate_report(matrix_report, cfg);
+    println!("\n=== Publishing to Confluence ===");
+    match report::publish_to_confluence(conf, &title, &content) {
+        Ok(url) => println!("  Published: {url}"),
+        Err(e) => println!("  WARNING: Failed to publish to Confluence: {e}"),
+    }
 }
