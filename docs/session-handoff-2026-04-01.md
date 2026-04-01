@@ -35,22 +35,18 @@ Built for ASM-17583 (Cerebras customer needs ~300 concurrent pod injections via 
 
 ## What's In Progress
 
-### WH Limit Sweep (running now)
-`burst-forge flow investigate-wh-limit-sweep` — 5 scenarios testing whether
-reducing WH CPU limits eliminates the WH replica penalty:
-- baseline (3×200m)
-- 12×50m (matched total limits)
-- 12×100m
-- 12×none (no limit)
-- 12×200m (reproduces penalty)
+### WH Limit Sweep (INCONCLUSIVE — needs re-run)
+`burst-forge flow investigate-wh-limit-sweep` — ran 5 scenarios but max_nodes=10
+capped all at 550/1000 pods. At 550 pods the system is node-bound, not gateway-bound.
+All 5 scenarios produced identical throughput (0.904-0.911 pods/s) — the test didn't
+reach the gateway bottleneck point.
 
-**Issue:** configs have max_nodes=10, which caps 1000-pod scenarios at ~550 pods.
-Not a problem for throughput comparison (pods/sec is the metric) but won't reach 1000/1000.
-Fix: change max_nodes to 20 in investigation configs.
+**Fix applied:** max_nodes changed to 20. Needs re-run to get meaningful data.
+Published (inconclusive): https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3978395670
 
-### GW CPU Test (queued next)
-`burst-forge flow investigate-gw-cpu` — tests whether GW with higher CPU limits
-improves throughput beyond QPS=5.
+### GW CPU Test (running now)
+`burst-forge flow investigate-gw-cpu` — testing GW at 500m vs 1000m vs no limit.
+max_nodes fixed to 20.
 
 ### Pangea State Alignment (analysis running in background)
 The Pangea code has been updated with burst node group + /20 subnets but NOT applied.
