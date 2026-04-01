@@ -48,10 +48,21 @@ Published (inconclusive): https://akeyless.atlassian.net/wiki/spaces/~7120203936
 `burst-forge flow investigate-gw-cpu` — testing GW at 500m vs 1000m vs no limit.
 max_nodes fixed to 20.
 
-### Pangea State Alignment (analysis running in background)
+### Pangea State Alignment (analyzed — needs 30-min import session)
 The Pangea code has been updated with burst node group + /20 subnets but NOT applied.
-Ad-hoc AWS resources exist. Running `pangea apply` risks conflicts.
-Background agent is analyzing the safest alignment path.
+Ad-hoc AWS resources exist. **DO NOT run `pangea apply`** — it will try to create
+resources that already exist and fail.
+
+**Safe path:** terraform import the 5 ad-hoc resources into Pangea state:
+```bash
+terraform import aws_eks_node_group.scale-test-burst scale-test:scale-test-burst
+terraform import aws_subnet.scale-test-pods-0 subnet-0a9f66f70b24b1fed
+terraform import aws_subnet.scale-test-pods-1 subnet-076e7e717c6390e53
+terraform import aws_route_table_association.scale-test-pods-0 <rtbassoc-id>
+terraform import aws_route_table_association.scale-test-pods-1 <rtbassoc-id>
+```
+After import: `pangea plan` should show no changes.
+State bucket: s3://pleme-dev-terraform-state/pangea/eks-scale-test
 
 ## Cluster State
 
