@@ -1,0 +1,50 @@
+# Gap 4: 4-worker test with optimal config (5 GW + 3 WH)
+# Prerequisite: scale-test-workers at 4 nodes
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 15
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"
+scenarios:
+  - { name: "workers-4-300", replicas: 300, gateway_replicas: 5, webhook_replicas: 3 }

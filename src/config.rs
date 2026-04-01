@@ -16,6 +16,19 @@ pub struct Scenario {
     /// Override node count (auto-calculated from `replicas/pods_per_node` if absent)
     #[serde(default)]
     pub nodes: Option<u32>,
+
+    /// Inject a sleep into the customer-init container to model realistic init latency.
+    /// Value in seconds. 0 or absent = no sleep (uses deployment template as-is).
+    #[serde(default)]
+    pub init_sleep_secs: Option<u32>,
+
+    /// Override pod memory request (e.g., "30Gi") for scheduling pressure testing.
+    #[serde(default)]
+    pub pod_memory_request: Option<String>,
+
+    /// Override pod memory limit. If absent, mirrors request.
+    #[serde(default)]
+    pub pod_memory_limit: Option<String>,
 }
 
 /// EKS node group configuration for burst testing.

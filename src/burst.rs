@@ -278,6 +278,41 @@ fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
     }
 }
 
+/// Apply per-scenario pod spec patches to the deployment before bursting.
+///
+/// Uses strategic merge patch (same pattern as maxSurge patching).
+/// When a field is None, resets to baseline to ensure inter-scenario isolation.
+pub fn apply_scenario_patches(
+    kubectl: &crate::kubectl::KubeCtl,
+    config: &crate::config::Config,
+    scenario: &crate::config::Scenario,
+) -> anyhow::Result<()> {
+    let ns = &config.namespace;
+    let dep = &config.deployment;
+
+    // Init container latency: patch customer-init command to include sleep
+    let sleep = scenario.init_sleep_secs.unwrap_or(0);
+    if sleep > 0 {
+        crate::output::print_action(&format!("Patching init container: sleep {sleep}s"));
+        let patch = format!(
+            r#"{{"spec":{{"template":{{"spec":{{"initContainers":[{{"name":"customer-init","command":["sh","-c","sleep {sleep} && echo done"]}}]}}}}}}}}"#
+        );
+        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
+    }
+
+    // Memory request/limit override
+    if let Some(mem) = &scenario.pod_memory_request {
+        let limit = scenario.pod_memory_limit.as_deref().unwrap_or(mem);
+        crate::output::print_action(&format!("Patching pod memory: request={mem}, limit={limit}"));
+        let patch = format!(
+            r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"nginx","resources":{{"requests":{{"memory":"{mem}"}},"limits":{{"memory":"{limit}"}}}}}}]}}}}}}}}"#
+        );
+        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
+    }
+
+    Ok(())
+}
+
 /// Calculate the injection success rate as a percentage.
 fn injection_rate(running: u32, injected: u32) -> f64 {
     if running > 0 {

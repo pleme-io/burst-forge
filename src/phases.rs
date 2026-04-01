@@ -281,6 +281,16 @@ pub fn run_phase_2_warmup(
         timings.gates_ms = sub_start.elapsed().as_millis() as u64;
     }
 
+    // 2f: Per-scenario pod spec patches (init latency, memory)
+    let sub_start = Instant::now();
+    if scenario.init_sleep_secs.is_some() || scenario.pod_memory_request.is_some() {
+        burst::apply_scenario_patches(kubectl, config, scenario)?;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        timings.patches_ms = sub_start.elapsed().as_millis() as u64;
+    }
+
     #[allow(clippy::cast_possible_truncation)]
     {
         timings.total_ms = phase_start.elapsed().as_millis() as u64;

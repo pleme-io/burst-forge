@@ -69,6 +69,9 @@ pub struct WarmupTimings {
     pub webhook_ms: u64,
     /// Time for all gates to pass (ms).
     pub gates_ms: u64,
+    /// Time for per-scenario pod spec patches (ms).
+    #[serde(default)]
+    pub patches_ms: u64,
     /// Total warmup time (ms).
     pub total_ms: u64,
 }
