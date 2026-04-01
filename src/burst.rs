@@ -278,6 +278,29 @@ fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
     }
 }
 
+/// Count individual injected secrets per pod (env vars matching prefix).
+/// Returns the total count across all containers.
+fn injection_secret_count(pod: &serde_json::Value, config: &Config) -> u32 {
+    let Some(containers) = pod["spec"]["containers"].as_array() else {
+        return 0;
+    };
+    let prefix = &config.injection_env_prefix;
+    let mut count = 0u32;
+    for c in containers {
+        if let Some(envs) = c["env"].as_array() {
+            for e in envs {
+                if e["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with(prefix))
+                {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
 /// Apply per-scenario pod spec patches to the deployment before bursting.
 ///
 /// Uses strategic merge patch (same pattern as maxSurge patching).

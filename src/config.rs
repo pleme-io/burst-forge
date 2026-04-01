@@ -29,6 +29,11 @@ pub struct Scenario {
     /// Override pod memory limit. If absent, mirrors request.
     #[serde(default)]
     pub pod_memory_limit: Option<String>,
+
+    /// Expected number of secrets per pod. Used for injection count verification.
+    /// When set, burst-forge counts individual injected secrets (not just presence).
+    #[serde(default)]
+    pub expected_secrets: Option<u32>,
 }
 
 /// EKS node group configuration for burst testing.
