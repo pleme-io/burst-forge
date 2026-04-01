@@ -6,7 +6,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::config::NodeGroupConfig;
+use crate::config::{NodeGroupConfig, WorkerNodeGroupConfig};
 use crate::kubectl::KubeCtl;
 use crate::output;
 
@@ -292,5 +292,87 @@ pub fn wait_for_daemonset_ready(
         }
 
         std::thread::sleep(poll_interval);
+    }
+}
+
+/// Scale the worker node group to the desired count.
+///
+/// # Errors
+///
+/// Returns an error if the AWS API call fails.
+pub fn scale_worker_group(config: &WorkerNodeGroupConfig, desired: u32) -> anyhow::Result<()> {
+    output::print_action(&format!(
+        "Scaling worker group {} to {desired} nodes...",
+        config.nodegroup_name
+    ));
+
+    let scaling_config = format!(
+        "minSize={min},maxSize=6,desiredSize={desired}",
+        min = desired.min(3),
+    );
+
+    let mut cmd = Command::new("aws");
+    cmd.args([
+        "eks",
+        "update-nodegroup-config",
+        "--cluster-name",
+        &config.cluster_name,
+        "--nodegroup-name",
+        &config.nodegroup_name,
+        "--scaling-config",
+        &scaling_config,
+        "--region",
+        &config.region,
+    ]);
+
+    if let Some(profile) = &config.aws_profile {
+        cmd.args(["--profile", profile]);
+    }
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "aws eks update-nodegroup-config (workers) failed: {}",
+            stderr.trim()
+        );
+    }
+
+    output::print_status(&format!("Worker group scaling to {desired}"));
+    Ok(())
+}
+
+/// Wait until burst node group reaches exactly 0 nodes.
+/// Polls every 15s up to `timeout`.
+///
+/// # Errors
+///
+/// Returns an error if the timeout is exceeded.
+pub fn wait_for_zero_burst_nodes(
+    kubectl: &KubeCtl,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let poll = Duration::from_secs(15);
+
+    loop {
+        let count = count_ready_nodes(kubectl).unwrap_or(u32::MAX);
+        if count == 0 {
+            output::print_status("Burst nodes at 0 (confirmed)");
+            return Ok(());
+        }
+
+        if start.elapsed() > timeout {
+            output::print_warning(&format!(
+                "Burst node teardown incomplete: {count} nodes still present after {}s",
+                timeout.as_secs()
+            ));
+            return Ok(());
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed = start.elapsed().as_secs();
+        output::print_progress(elapsed, &format!("Waiting for burst nodes: {count} remaining"));
+        std::thread::sleep(poll);
     }
 }

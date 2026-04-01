@@ -51,6 +51,23 @@ pub fn run_matrix(
 
     output::print_phase(&format!("Scaling Matrix: {} scenarios", scenarios.len()));
 
+    // Scale worker node group to desired count (if configured)
+    if let Some(wng) = &config.worker_node_group {
+        output::print_phase("Environment Setup");
+        nodes::scale_worker_group(wng, wng.desired)?;
+        // Wait for workers to be ready before proceeding
+        output::print_action(&format!(
+            "Waiting for {} worker nodes to be ready...",
+            wng.desired
+        ));
+        nodes::wait_for_nodes(
+            kubectl,
+            wng.desired,
+            std::time::Duration::from_secs(config.timeout_secs),
+            std::time::Duration::from_secs(config.node_poll_interval_secs),
+        )?;
+    }
+
     let mut results = Vec::new();
 
     for (i, scenario) in scenarios.iter().enumerate() {
@@ -157,11 +174,27 @@ pub fn run_matrix(
         }
     }
 
-    // Scale node group back to 0 after all scenarios — always attempt
+    // Scale burst node group back to 0 — always attempt
     if let Some(ng) = &config.node_group {
-        output::print_phase("Scaling Node Group to 0");
+        output::print_phase("Scaling Burst Nodes to 0");
         if let Err(e) = nodes::scale_node_group(ng, 0) {
-            output::print_warning(&format!("Failed to scale down node group: {e}"));
+            output::print_warning(&format!("Failed to scale down burst nodes: {e}"));
+        }
+
+        // Verified teardown: wait until burst nodes actually reach 0
+        if config.verify_teardown {
+            nodes::wait_for_zero_burst_nodes(
+                kubectl,
+                std::time::Duration::from_secs(300),
+            )?;
+        }
+    }
+
+    // Restore worker node group to baseline — always attempt
+    if let Some(wng) = &config.worker_node_group {
+        output::print_phase("Restoring Workers to Baseline");
+        if let Err(e) = nodes::scale_worker_group(wng, wng.baseline) {
+            output::print_warning(&format!("Failed to restore workers: {e}"));
         }
     }
 

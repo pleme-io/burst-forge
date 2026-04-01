@@ -52,6 +52,34 @@ pub struct NodeGroupConfig {
     pub max_nodes: u32,
 }
 
+/// Worker node group configuration (optional — for managing infra node scaling).
+///
+/// When configured, burst-forge scales the worker node group to `desired` before
+/// the matrix and back to `baseline` after cleanup. If absent, worker scaling
+/// is not managed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerNodeGroupConfig {
+    /// EKS cluster name (reuses from `node_group` if same cluster).
+    pub cluster_name: String,
+    /// Worker node group name (e.g., "scale-test-workers").
+    pub nodegroup_name: String,
+    /// AWS region.
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// AWS profile.
+    #[serde(default)]
+    pub aws_profile: Option<String>,
+    /// Desired worker count during experiments.
+    #[serde(default = "default_worker_desired")]
+    pub desired: u32,
+    /// Baseline worker count to return to after experiments.
+    #[serde(default = "default_worker_baseline")]
+    pub baseline: u32,
+}
+
+fn default_worker_desired() -> u32 { 3 }
+fn default_worker_baseline() -> u32 { 3 }
+
 /// Image cache configuration for Zot registry lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageCacheConfig {
@@ -175,9 +203,21 @@ pub struct Config {
     #[serde(default)]
     pub scenarios: Vec<Scenario>,
 
-    /// EKS node group management for burst testing
+    /// EKS node group management for burst testing (burst pods).
     #[serde(default)]
     pub node_group: Option<NodeGroupConfig>,
+
+    /// Worker node group management (infrastructure pods: gateway + webhook).
+    /// When configured, burst-forge scales workers to `desired` before experiments
+    /// and back to `baseline` after cleanup. Ensures infrastructure has the right
+    /// capacity before any scenario fires.
+    #[serde(default)]
+    pub worker_node_group: Option<WorkerNodeGroupConfig>,
+
+    /// Whether to verify teardown completed (burst nodes at 0, pods drained)
+    /// before exiting. Default: true.
+    #[serde(default = "default_true")]
+    pub verify_teardown: bool,
 
     /// `DaemonSet` warmup configuration for image pre-pull after node scale-up.
     #[serde(default)]
