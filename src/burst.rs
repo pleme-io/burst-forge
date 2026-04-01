@@ -349,6 +349,25 @@ pub fn apply_scenario_patches(
         kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", patch])?;
     }
 
+    // Secret count: patch the akeyless/secret-path annotation with N comma-separated paths
+    if let Some(secret_count) = scenario.expected_secrets {
+        let paths: Vec<String> = (1..=secret_count)
+            .map(|i| {
+                if i == 1 {
+                    "/pleme/test/hello".to_string()
+                } else {
+                    format!("/pleme/test/hello{i}")
+                }
+            })
+            .collect();
+        let secret_path = paths.join(",");
+        crate::output::print_action(&format!("Setting {secret_count} secrets: {secret_path}"));
+        let patch = format!(
+            r#"{{"spec":{{"template":{{"metadata":{{"annotations":{{"akeyless/secret-path":"{secret_path}"}}}}}}}}}}"#
+        );
+        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
+    }
+
     Ok(())
 }
 
