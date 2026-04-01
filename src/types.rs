@@ -25,6 +25,12 @@ pub struct BurstResult {
     pub duration_ms: u64,
     pub nodes: u32,
     pub iteration: u32,
+    /// Total individual secrets injected across all pods.
+    #[serde(default)]
+    pub total_secrets_injected: u32,
+    /// Peak concurrent Running pods (useful for Jobs that complete and get cleaned up).
+    #[serde(default)]
+    pub peak_running: u32,
 }
 
 /// Result of infrastructure verification.

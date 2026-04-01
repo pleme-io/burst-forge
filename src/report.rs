@@ -37,6 +37,8 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
          <th>Scenario</th>\
          <th>Replicas</th>\
          <th>Pods Running</th>\
+         <th>Peak Running</th>\
+         <th>Secrets</th>\
          <th>Injection Rate</th>\
          <th>First Ready (ms)</th>\
          <th>All Ready (ms)</th>\
@@ -49,6 +51,14 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
             .burst
             .as_ref()
             .map_or_else(|| "-".to_string(), |b| b.pods_running.to_string());
+        let peak = s
+            .burst
+            .as_ref()
+            .map_or_else(|| "-".to_string(), |b| b.peak_running.to_string());
+        let secrets = s
+            .burst
+            .as_ref()
+            .map_or_else(|| "-".to_string(), |b| b.total_secrets_injected.to_string());
         let rate = s
             .burst
             .as_ref()
@@ -65,7 +75,7 @@ pub fn generate_report(report: &MatrixReport, config: &Config) -> (String, Strin
 
         let _ = write!(
             html,
-            "<tr><td>{}</td><td>{}</td><td>{pods}</td><td>{rate}</td>\
+            "<tr><td>{}</td><td>{}</td><td>{pods}</td><td>{peak}</td><td>{secrets}</td><td>{rate}</td>\
              <td>{first}</td><td>{all}</td><td>{error}</td></tr>",
             s.name, s.replicas
         );

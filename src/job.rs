@@ -206,6 +206,8 @@ pub fn run_burst_jobs(
                 #[allow(clippy::cast_possible_truncation)]
                 nodes: items.len() as u32,
                 iteration,
+                total_secrets_injected: 0, // TODO: wire injection_secret_count for Jobs
+                peak_running,
             });
         }
 
@@ -269,6 +271,8 @@ pub fn run_burst_jobs(
         duration_ms: start.elapsed().as_millis() as u64,
         nodes: 0,
         iteration,
+        total_secrets_injected: 0,
+        peak_running,
     })
 }
 

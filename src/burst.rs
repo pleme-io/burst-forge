@@ -70,6 +70,8 @@ pub fn run_burst(
     let mut first_ready_time: Option<u64> = None;
     let mut full_admission_time: Option<u64> = None;
     let mut half_running_time: Option<u64> = None;
+    let mut peak_running: u32 = 0;
+    let mut total_secrets: u32 = 0;
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
     let timeout_duration = Duration::from_secs(config.timeout_secs);
     let app_label = config.resolved_pod_label();
@@ -95,6 +97,9 @@ pub fn run_burst(
 
         let (running, pending, failed, injected) =
             count_pod_states(items, config);
+
+        peak_running = peak_running.max(running);
+        total_secrets = items.iter().map(|p| injection_secret_count(p, config)).sum();
 
         #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = burst_start.elapsed().as_millis() as u64;
@@ -152,6 +157,8 @@ pub fn run_burst(
                 #[allow(clippy::cast_possible_truncation)]
                 nodes: items.len() as u32,
                 iteration,
+                total_secrets_injected: total_secrets,
+                peak_running,
             });
         }
 
@@ -213,6 +220,8 @@ pub fn run_burst(
         duration_ms: start.elapsed().as_millis() as u64,
         nodes: 0,
         iteration,
+        total_secrets_injected: total_secrets,
+        peak_running,
     })
 }
 
