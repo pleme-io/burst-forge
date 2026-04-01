@@ -119,6 +119,7 @@ pub fn run_burst_jobs(
     let mut first_ready_time: Option<u64> = None;
     let mut full_admission_time: Option<u64> = None;
     let mut half_running_time: Option<u64> = None;
+    let mut peak_running: u32 = 0;
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
     let timeout_duration = Duration::from_secs(config.timeout_secs);
     let app_label = config.resolved_pod_label();
@@ -144,6 +145,9 @@ pub fn run_burst_jobs(
 
         let (running, pending, failed, injected) =
             count_job_pod_states(items, config);
+
+        // Track peak running (Jobs complete and get cleaned up, so final count underreports)
+        peak_running = peak_running.max(running);
 
         #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = burst_start.elapsed().as_millis() as u64;
@@ -244,14 +248,17 @@ pub fn run_burst_jobs(
         0.0
     };
 
+    // For Jobs, use peak_running as the definitive count (pods complete and get cleaned up)
+    peak_running = peak_running.max(running);
+
     Ok(BurstResult {
         timestamp,
         replicas_requested: replicas,
-        pods_running: running,
+        pods_running: peak_running, // Use peak, not current (Jobs complete and get cleaned up)
         pods_failed: failed,
         pods_pending: pending,
         pods_injected: injected,
-        injection_success_rate: injection_rate(running, injected),
+        injection_success_rate: injection_rate(peak_running, injected),
         time_to_first_ready_ms: first_ready_time.unwrap_or(0),
         time_to_all_ready_ms: None,
         time_to_full_admission_ms: full_admission_time,

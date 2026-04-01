@@ -295,12 +295,77 @@ pub fn wait_for_daemonset_ready(
     }
 }
 
+/// Wait for an EKS nodegroup to reach a target status (e.g., "ACTIVE").
+/// Polls every 15s. Prevents `ResourceInUseException` from concurrent updates.
+///
+/// # Errors
+///
+/// Returns an error if the timeout is exceeded.
+pub fn wait_for_nodegroup_status(
+    cluster_name: &str,
+    nodegroup_name: &str,
+    region: &str,
+    profile: Option<&str>,
+    target_status: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let poll = Duration::from_secs(15);
+
+    loop {
+        let mut cmd = Command::new("aws");
+        cmd.args([
+            "eks", "describe-nodegroup",
+            "--cluster-name", cluster_name,
+            "--nodegroup-name", nodegroup_name,
+            "--region", region,
+            "--query", "nodegroup.status",
+            "--output", "text",
+        ]);
+        if let Some(p) = profile {
+            cmd.args(["--profile", p]);
+        }
+
+        let output = cmd.output();
+        if let Ok(out) = output {
+            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if status == target_status {
+                return Ok(());
+            }
+            if start.elapsed() > timeout {
+                anyhow::bail!(
+                    "Nodegroup {nodegroup_name} did not reach {target_status} (current: {status}) after {}s",
+                    timeout.as_secs()
+                );
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed = start.elapsed().as_secs();
+            output::print_progress(elapsed, &format!(
+                "Nodegroup {nodegroup_name}: {status} (waiting for {target_status})"
+            ));
+        }
+
+        std::thread::sleep(poll);
+    }
+}
+
 /// Scale the worker node group to the desired count.
+/// Waits for ACTIVE status before attempting the scale to avoid `ResourceInUseException`.
 ///
 /// # Errors
 ///
 /// Returns an error if the AWS API call fails.
 pub fn scale_worker_group(config: &WorkerNodeGroupConfig, desired: u32) -> anyhow::Result<()> {
+    // Wait for nodegroup to be ACTIVE before scaling (prevents ResourceInUseException)
+    wait_for_nodegroup_status(
+        &config.cluster_name,
+        &config.nodegroup_name,
+        &config.region,
+        config.aws_profile.as_deref(),
+        "ACTIVE",
+        Duration::from_secs(300),
+    )?;
+
     output::print_action(&format!(
         "Scaling worker group {} to {desired} nodes...",
         config.nodegroup_name
@@ -342,21 +407,37 @@ pub fn scale_worker_group(config: &WorkerNodeGroupConfig, desired: u32) -> anyho
     Ok(())
 }
 
-/// Wait until burst node group reaches exactly 0 nodes.
-/// Polls every 15s up to `timeout`.
+/// Count nodes belonging to a specific nodegroup by label.
+///
+/// # Errors
+///
+/// Returns an error if kubectl fails.
+pub fn count_nodes_by_nodegroup(kubectl: &KubeCtl, nodegroup_name: &str) -> anyhow::Result<u32> {
+    let label = format!("eks.amazonaws.com/nodegroup={nodegroup_name}");
+    let output = kubectl.run(&["get", "nodes", "-l", &label, "--no-headers"])?;
+    if output.is_empty() {
+        return Ok(0);
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(output.lines().count() as u32)
+}
+
+/// Wait until burst nodes for a specific nodegroup reach exactly 0.
+/// Filters by nodegroup label instead of counting all nodes.
 ///
 /// # Errors
 ///
 /// Returns an error if the timeout is exceeded.
 pub fn wait_for_zero_burst_nodes(
     kubectl: &KubeCtl,
+    nodegroup_name: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
     let poll = Duration::from_secs(15);
 
     loop {
-        let count = count_ready_nodes(kubectl).unwrap_or(u32::MAX);
+        let count = count_nodes_by_nodegroup(kubectl, nodegroup_name).unwrap_or(u32::MAX);
         if count == 0 {
             output::print_status("Burst nodes at 0 (confirmed)");
             return Ok(());
@@ -364,7 +445,7 @@ pub fn wait_for_zero_burst_nodes(
 
         if start.elapsed() > timeout {
             output::print_warning(&format!(
-                "Burst node teardown incomplete: {count} nodes still present after {}s",
+                "Burst node teardown incomplete: {count} nodes in {nodegroup_name} after {}s",
                 timeout.as_secs()
             ));
             return Ok(());
@@ -372,7 +453,7 @@ pub fn wait_for_zero_burst_nodes(
 
         #[allow(clippy::cast_possible_truncation)]
         let elapsed = start.elapsed().as_secs();
-        output::print_progress(elapsed, &format!("Waiting for burst nodes: {count} remaining"));
+        output::print_progress(elapsed, &format!("Waiting for {nodegroup_name}: {count} remaining"));
         std::thread::sleep(poll);
     }
 }

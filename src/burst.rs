@@ -290,24 +290,31 @@ pub fn apply_scenario_patches(
     let ns = &config.namespace;
     let dep = &config.deployment;
 
-    // Init container latency: patch customer-init command to include sleep
+    // Init container latency: always set to ensure inter-scenario isolation
     let sleep = scenario.init_sleep_secs.unwrap_or(0);
-    if sleep > 0 {
-        crate::output::print_action(&format!("Patching init container: sleep {sleep}s"));
-        let patch = format!(
-            r#"{{"spec":{{"template":{{"spec":{{"initContainers":[{{"name":"customer-init","command":["sh","-c","sleep {sleep} && echo done"]}}]}}}}}}}}"#
-        );
-        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
-    }
+    let init_cmd = if sleep > 0 {
+        format!("sleep {sleep} && echo done")
+    } else {
+        "echo customer-init-complete".to_string()
+    };
+    crate::output::print_action(&format!("Setting init container: {init_cmd}"));
+    let patch = format!(
+        r#"{{"spec":{{"template":{{"spec":{{"initContainers":[{{"name":"customer-init","command":["sh","-c","{init_cmd}"]}}]}}}}}}}}"#
+    );
+    kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
 
-    // Memory request/limit override
+    // Memory request/limit: always set to ensure inter-scenario isolation
     if let Some(mem) = &scenario.pod_memory_request {
         let limit = scenario.pod_memory_limit.as_deref().unwrap_or(mem);
-        crate::output::print_action(&format!("Patching pod memory: request={mem}, limit={limit}"));
+        crate::output::print_action(&format!("Setting pod memory: request={mem}, limit={limit}"));
         let patch = format!(
             r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"nginx","resources":{{"requests":{{"memory":"{mem}"}},"limits":{{"memory":"{limit}"}}}}}}]}}}}}}}}"#
         );
         kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
+    } else {
+        // Reset to baseline (16Mi/64Mi from deployment template)
+        let patch = r#"{"spec":{"template":{"spec":{"containers":[{"name":"nginx","resources":{"requests":{"memory":"16Mi"},"limits":{"memory":"64Mi"}}}]}}}}"#;
+        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", patch])?;
     }
 
     Ok(())

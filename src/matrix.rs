@@ -52,20 +52,24 @@ pub fn run_matrix(
     output::print_phase(&format!("Scaling Matrix: {} scenarios", scenarios.len()));
 
     // Scale worker node group to desired count (if configured)
+    // Errors here don't skip cleanup — we proceed to the scenario loop
+    // which will fail on its own, then cleanup runs.
     if let Some(wng) = &config.worker_node_group {
         output::print_phase("Environment Setup");
-        nodes::scale_worker_group(wng, wng.desired)?;
-        // Wait for workers to be ready before proceeding
-        output::print_action(&format!(
-            "Waiting for {} worker nodes to be ready...",
-            wng.desired
-        ));
-        nodes::wait_for_nodes(
-            kubectl,
-            wng.desired,
-            std::time::Duration::from_secs(config.timeout_secs),
-            std::time::Duration::from_secs(config.node_poll_interval_secs),
-        )?;
+        if let Err(e) = nodes::scale_worker_group(wng, wng.desired) {
+            output::print_warning(&format!("Worker scaling failed: {e}. Continuing — scenarios may fail."));
+        } else {
+            output::print_action(&format!(
+                "Waiting for {} worker nodes to be ready...",
+                wng.desired
+            ));
+            let _ = nodes::wait_for_nodes(
+                kubectl,
+                wng.desired,
+                std::time::Duration::from_secs(config.timeout_secs),
+                std::time::Duration::from_secs(config.node_poll_interval_secs),
+            );
+        }
     }
 
     let mut results = Vec::new();
@@ -185,6 +189,7 @@ pub fn run_matrix(
         if config.verify_teardown {
             nodes::wait_for_zero_burst_nodes(
                 kubectl,
+                &ng.nodegroup_name,
                 std::time::Duration::from_secs(300),
             )?;
         }
