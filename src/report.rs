@@ -222,12 +222,19 @@ pub fn publish_to_confluence(
     title: &str,
     content: &str,
 ) -> anyhow::Result<String> {
-    // Token discovery: env var -> configured token_path
+    // Token discovery: env var -> configured token_path (with ~ expansion)
+    let expanded_path = if conf.token_path.starts_with("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(&conf.token_path[2..]).to_string_lossy().to_string())
+            .unwrap_or_else(|| conf.token_path.clone())
+    } else {
+        conf.token_path.clone()
+    };
     let token = std::env::var("CONFLUENCE_API_TOKEN").ok().or_else(|| {
-        std::fs::read_to_string(&conf.token_path).ok().map(|s| s.trim().to_string())
+        std::fs::read_to_string(&expanded_path).ok().map(|s| s.trim().to_string())
     }).with_context(|| format!(
         "Confluence API token not found. Set CONFLUENCE_API_TOKEN env var or ensure {} exists",
-        conf.token_path
+        expanded_path
     ))?;
 
     // Build Basic auth header: base64(email:token)
