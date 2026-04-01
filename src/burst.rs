@@ -371,6 +371,54 @@ pub fn apply_scenario_patches(
     Ok(())
 }
 
+/// Apply per-scenario infrastructure resource patches (webhook + gateway CPU).
+///
+/// Patches deployment container resources directly via kubectl.
+/// HelmRelease is suspended at this point, so patches persist until resume.
+pub fn apply_infrastructure_patches(
+    kubectl: &crate::kubectl::KubeCtl,
+    config: &crate::config::Config,
+    scenario: &crate::config::Scenario,
+) -> anyhow::Result<()> {
+    let inj_ns = &config.injection_namespace;
+
+    // Webhook CPU override
+    if scenario.webhook_cpu_request.is_some() || scenario.webhook_cpu_limit.is_some() {
+        let wh_dep = &config.webhook_deployment;
+        let req = scenario.webhook_cpu_request.as_deref().unwrap_or("50m");
+        let limit = scenario.webhook_cpu_limit.as_deref().unwrap_or("200m");
+
+        if limit == "0" {
+            // Remove CPU limit entirely (burstable QoS)
+            crate::output::print_action(&format!("Setting WH CPU: request={req}, limit=NONE"));
+            let patch = format!(
+                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"akeyless-secrets-injection","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{}}}}}}]}}}}}}}}"#
+            );
+            kubectl.run(&["-n", inj_ns, "patch", "deployment", wh_dep, "--type=strategic", "-p", &patch])?;
+        } else {
+            crate::output::print_action(&format!("Setting WH CPU: request={req}, limit={limit}"));
+            let patch = format!(
+                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"akeyless-secrets-injection","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{"cpu":"{limit}"}}}}}}]}}}}}}}}"#
+            );
+            kubectl.run(&["-n", inj_ns, "patch", "deployment", wh_dep, "--type=strategic", "-p", &patch])?;
+        }
+    }
+
+    // Gateway CPU override
+    if scenario.gateway_cpu_request.is_some() || scenario.gateway_cpu_limit.is_some() {
+        let gw_dep = &config.gateway_deployment;
+        let req = scenario.gateway_cpu_request.as_deref().unwrap_or("100m");
+        let limit = scenario.gateway_cpu_limit.as_deref().unwrap_or("500m");
+        crate::output::print_action(&format!("Setting GW CPU: request={req}, limit={limit}"));
+        let patch = format!(
+            r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"akeyless-api-gateway","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{"cpu":"{limit}"}}}}}}]}}}}}}}}"#
+        );
+        kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
+    }
+
+    Ok(())
+}
+
 /// Calculate the injection success rate as a percentage.
 fn injection_rate(running: u32, injected: u32) -> f64 {
     if running > 0 {

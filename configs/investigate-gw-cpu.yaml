@@ -1,3 +1,5 @@
+# Investigation: GW CPU limit effect on throughput
+# Hypothesis: if GW is CPU-bound, higher limit = faster secret delivery
 # Investigation: CPU observation at WH=3
 # Run with: burst-forge flow investigate-wh-cpu-3
 # Simultaneously run: kubectl top pods -n akeyless-system --sort-by=cpu -l 'app.kubernetes.io/name=akeyless-api-gateway or app=akeyless-secrets-injection' every 5s
@@ -57,7 +59,24 @@ confluence:
   user_email: "luis.d@akeyless.io"
   token_path: "~/.config/atlassian/akeyless/api-token"
 scenarios:
-  - name: "wh-3-cpu-obs"
-    replicas: 300
+  - name: "gw-500m"
+    replicas: 1000
     gateway_replicas: 11
     webhook_replicas: 3
+    # Default 500m GW limit — baseline
+
+  - name: "gw-1000m"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 3
+    gateway_cpu_limit: "1000m"
+    gateway_cpu_request: "200m"
+    # Double GW limit — does throughput increase?
+
+  - name: "gw-no-limit"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 3
+    gateway_cpu_limit: "0"
+    gateway_cpu_request: "100m"
+    # No GW limit — is QPS=5 or CPU the real ceiling?

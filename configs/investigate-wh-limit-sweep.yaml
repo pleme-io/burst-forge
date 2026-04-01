@@ -1,3 +1,6 @@
+# Investigation: WH CPU limit sweep at 12 replicas
+# Hypothesis: matching total CPU limits (6100m) at WH=12 should match WH=3 speed
+# Test 1: 50m and 100m limits. Test 2: no limit (0).
 # Investigation: CPU observation at WH=3
 # Run with: burst-forge flow investigate-wh-cpu-3
 # Simultaneously run: kubectl top pods -n akeyless-system --sort-by=cpu -l 'app.kubernetes.io/name=akeyless-api-gateway or app=akeyless-secrets-injection' every 5s
@@ -57,7 +60,38 @@ confluence:
   user_email: "luis.d@akeyless.io"
   token_path: "~/.config/atlassian/akeyless/api-token"
 scenarios:
-  - name: "wh-3-cpu-obs"
-    replicas: 300
+  - name: "baseline-3wh-200m"
+    replicas: 1000
     gateway_replicas: 11
     webhook_replicas: 3
+    # Default 200m limit — baseline (total limits: 6100m, 5% over)
+
+  - name: "12wh-50m"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 12
+    webhook_cpu_request: "25m"
+    webhook_cpu_limit: "50m"
+    # Total WH limits: 600m. Total all: 6100m (5% over — matches baseline)
+
+  - name: "12wh-100m"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 12
+    webhook_cpu_request: "50m"
+    webhook_cpu_limit: "100m"
+    # Total WH limits: 1200m. Total all: 6700m (15% over)
+
+  - name: "12wh-no-limit"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 12
+    webhook_cpu_request: "25m"
+    webhook_cpu_limit: "0"
+    # No WH limit. Total limits: 5500m (GW only — under capacity)
+
+  - name: "12wh-200m"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 12
+    # Default 200m limit — reproduces original penalty (total limits: 7900m, 36% over)

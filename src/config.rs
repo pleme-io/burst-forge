@@ -34,6 +34,19 @@ pub struct Scenario {
     /// When set, burst-forge counts individual injected secrets (not just presence).
     #[serde(default)]
     pub expected_secrets: Option<u32>,
+
+    /// Override webhook CPU request per scenario (e.g., "50m").
+    #[serde(default)]
+    pub webhook_cpu_request: Option<String>,
+    /// Override webhook CPU limit per scenario (e.g., "100m"). Use "0" to remove limit.
+    #[serde(default)]
+    pub webhook_cpu_limit: Option<String>,
+    /// Override gateway CPU request per scenario (e.g., "200m").
+    #[serde(default)]
+    pub gateway_cpu_request: Option<String>,
+    /// Override gateway CPU limit per scenario (e.g., "1000m").
+    #[serde(default)]
+    pub gateway_cpu_limit: Option<String>,
 }
 
 /// EKS node group configuration for burst testing.
