@@ -48,6 +48,33 @@ impl KubeCtl {
         Ok(value)
     }
 
+    /// Run kubectl with stdin piped from the given data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if kubectl exits non-zero.
+    pub fn run_stdin(&self, args: &[&str], stdin_data: &str) -> anyhow::Result<String> {
+        let mut cmd = Command::new("kubectl");
+        if let Some(kc) = &self.kubeconfig {
+            cmd.arg("--kubeconfig").arg(kc);
+        }
+        cmd.args(args);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn()?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write;
+            stdin.write_all(stdin_data.as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("kubectl failed: {}", stderr.trim());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     /// Patch a `HelmRelease` to set the desired replica count via values override.
     ///
     /// This patches the `HelmRelease` spec to set `spec.values.replicaCount`.

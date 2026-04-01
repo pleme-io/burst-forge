@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: BURST_NAME
+  labels:
+    app: nginx-burst
+    purpose: scale-testing
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: nginx-burst
+        purpose: scale-testing
+      annotations:
+        akeyless/enabled: "true"
+        akeyless/access-id: "p-nn5huxl36myiam"
+        akeyless/secret-path: "/pleme/test/hello,/pleme/test/hello2"
+        akeyless/secret-output: "env"
+    spec:
+      nodeSelector:
+        eks.amazonaws.com/nodegroup: scale-test-burst
+      terminationGracePeriodSeconds: 5
+      restartPolicy: Never
+      initContainers:
+        - name: customer-init
+          image: 376129857990.dkr.ecr.us-east-1.amazonaws.com/library/busybox:1.30.1
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "echo customer-init-complete"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+      containers:
+        - name: nginx
+          image: 376129857990.dkr.ecr.us-east-1.amazonaws.com/library/nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "echo job-complete && sleep 30"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi

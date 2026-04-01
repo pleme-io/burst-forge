@@ -102,6 +102,14 @@ pub struct Config {
     #[serde(default = "default_deployment")]
     pub deployment: String,
 
+    /// Workload kind: "deployment" (default) or "job".
+    #[serde(default)]
+    pub workload_kind: WorkloadKind,
+
+    /// Path to Job template YAML (required when `workload_kind: job`).
+    #[serde(default)]
+    pub job_template: Option<String>,
+
     /// Label selector for burst test pods (default: `app={deployment}`).
     #[serde(default)]
     pub pod_label: Option<String>,
@@ -333,6 +341,17 @@ fn default_token_path() -> String {
         || "~/.config/atlassian/api-token".to_string(),
         |d| d.join("atlassian").join("api-token").to_string_lossy().to_string(),
     )
+}
+
+/// Workload kind for burst tests.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkloadKind {
+    /// Scale a Deployment (kubectl scale deployment --replicas=N).
+    #[default]
+    Deployment,
+    /// Create N individual Jobs from a template.
+    Job,
 }
 
 /// How burst-forge detects successful secret injection.

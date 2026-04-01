@@ -30,12 +30,20 @@ pub fn run_phase_1_reset(
 
     let app_label = config.resolved_pod_label();
 
-    // Scale deployment to 0
-    output::print_action("Scaling deployment to 0...");
-    let _ = kubectl.run(&[
-        "-n", &config.namespace, "scale", "deployment",
-        &config.deployment, "--replicas=0",
-    ]);
+    // Scale to 0 (Deployment) or delete jobs (Job)
+    match config.workload_kind {
+        crate::config::WorkloadKind::Deployment => {
+            output::print_action("Scaling deployment to 0...");
+            let _ = kubectl.run(&[
+                "-n", &config.namespace, "scale", "deployment",
+                &config.deployment, "--replicas=0",
+            ]);
+        }
+        crate::config::WorkloadKind::Job => {
+            output::print_action("Deleting jobs...");
+            let _ = crate::job::delete_jobs(kubectl, config);
+        }
+    }
 
     // Force delete or graceful drain based on config
     if config.reset.force_delete {
@@ -316,14 +324,28 @@ pub fn run_phase_3_execution(
     output::print_phase("Phase 3: EXECUTION");
     let start = Instant::now();
 
-    let result = burst::run_burst(
-        kubectl,
-        config,
-        scenario.replicas,
-        1,
-        scenario.gateway_replicas,
-        scenario.webhook_replicas,
-    )?;
+    let result = match config.workload_kind {
+        crate::config::WorkloadKind::Deployment => burst::run_burst(
+            kubectl,
+            config,
+            scenario.replicas,
+            1,
+            scenario.gateway_replicas,
+            scenario.webhook_replicas,
+        )?,
+        crate::config::WorkloadKind::Job => {
+            let template = crate::job::load_template(config)?;
+            crate::job::run_burst_jobs(
+                kubectl,
+                config,
+                &template,
+                scenario.replicas,
+                1,
+                scenario.gateway_replicas,
+                scenario.webhook_replicas,
+            )?
+        }
+    };
 
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;

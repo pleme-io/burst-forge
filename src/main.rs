@@ -9,6 +9,7 @@ mod config;
 mod drain;
 mod flux;
 mod gates;
+mod job;
 mod kubectl;
 mod matrix;
 mod nodes;
@@ -172,12 +173,20 @@ fn main() -> anyhow::Result<()> {
         let kctl = KubeCtl::new(cleanup_kubeconfig.clone());
         let app_label = cleanup_cfg.resolved_pod_label();
 
-        // Scale deployment to 0
-        let _ = kctl.run(&[
-            "-n", &cleanup_cfg.namespace,
-            "scale", "deployment", &cleanup_cfg.deployment, "--replicas=0",
-        ]);
-        output::eprint_status("Deployment scaled to 0");
+        // Scale to 0 / delete jobs
+        match cleanup_cfg.workload_kind {
+            config::WorkloadKind::Deployment => {
+                let _ = kctl.run(&[
+                    "-n", &cleanup_cfg.namespace,
+                    "scale", "deployment", &cleanup_cfg.deployment, "--replicas=0",
+                ]);
+                output::eprint_status("Deployment scaled to 0");
+            }
+            config::WorkloadKind::Job => {
+                let _ = job::delete_jobs(&kctl, &cleanup_cfg);
+                output::eprint_status("Jobs deleted");
+            }
+        }
 
         // Force delete all burst pods (--grace-period=0)
         output::eprint_status("Force deleting burst pods...");
