@@ -44,9 +44,18 @@ reach the gateway bottleneck point.
 **Fix applied:** max_nodes changed to 20. Needs re-run to get meaningful data.
 Published (inconclusive): https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3978395670
 
-### GW CPU Test (running now)
-`burst-forge flow investigate-gw-cpu` — testing GW at 500m vs 1000m vs no limit.
-max_nodes fixed to 20.
+### GW CPU Test (partial — container name bug)
+`burst-forge flow investigate-gw-cpu` — scenario 1 (500m baseline) succeeded:
+1000/1000 in 153.8s, 6.5 pods/s. Scenarios 2-3 (1000m and no-limit) failed
+because apply_infrastructure_patches uses wrong container name for GW.
+
+**Bug:** The strategic merge patch hardcodes `"name":"akeyless-api-gateway"` but
+the actual container name in the GW deployment is different (likely `akeyless-api-gw`
+or similar — need to check). The patch creates a NEW container entry instead of
+merging, breaking the deployment spec.
+
+**Fix needed:** Query the deployment to get the actual container name, or check
+the HelmRelease to find the correct name. Then re-run.
 
 ### Pangea State Alignment (analyzed — needs 30-min import session)
 The Pangea code has been updated with burst node group + /20 subnets but NOT applied.
