@@ -47,6 +47,12 @@ pub struct Scenario {
     /// Override gateway CPU limit per scenario (e.g., "1000m").
     #[serde(default)]
     pub gateway_cpu_limit: Option<String>,
+    /// Override gateway memory request per scenario (e.g., "256Mi").
+    #[serde(default)]
+    pub gateway_memory_request: Option<String>,
+    /// Override gateway memory limit per scenario (e.g., "1Gi").
+    #[serde(default)]
+    pub gateway_memory_limit: Option<String>,
 }
 
 /// EKS node group configuration for burst testing.
@@ -235,6 +241,11 @@ pub struct Config {
     /// capacity before any scenario fires.
     #[serde(default)]
     pub worker_node_group: Option<WorkerNodeGroupConfig>,
+
+    /// Observability node group — scales to 1 during warmup, 0 on cleanup.
+    /// Hosts VictoriaMetrics, Grafana, Loki for live experiment metrics.
+    #[serde(default)]
+    pub observability_node_group: Option<NodeGroupConfig>,
 
     /// Whether to verify teardown completed (burst nodes at 0, pods drained)
     /// before exiting. Default: true.

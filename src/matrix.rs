@@ -54,6 +54,14 @@ pub fn run_matrix(
     // Scale worker node group to desired count (if configured)
     // Errors here don't skip cleanup — we proceed to the scenario loop
     // which will fail on its own, then cleanup runs.
+    // Scale observability node group to 1 (monitoring stack)
+    if let Some(ong) = &config.observability_node_group {
+        output::print_action("Scaling observability node to 1...");
+        if let Err(e) = nodes::scale_node_group(ong, 1) {
+            output::print_warning(&format!("Observability scaling failed: {e}. Metrics may not be available."));
+        }
+    }
+
     if let Some(wng) = &config.worker_node_group {
         output::print_phase("Environment Setup");
         if let Err(e) = nodes::scale_worker_group(wng, wng.desired) {
@@ -200,6 +208,14 @@ pub fn run_matrix(
         output::print_phase("Restoring Workers to Baseline");
         if let Err(e) = nodes::scale_worker_group(wng, wng.baseline) {
             output::print_warning(&format!("Failed to restore workers: {e}"));
+        }
+    }
+
+    // Scale observability node group back to 0
+    if let Some(ong) = &config.observability_node_group {
+        output::print_action("Scaling observability node to 0...");
+        if let Err(e) = nodes::scale_node_group(ong, 0) {
+            output::print_warning(&format!("Failed to scale down observability: {e}"));
         }
     }
 

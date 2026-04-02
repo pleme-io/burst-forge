@@ -383,6 +383,12 @@ fn main() -> anyhow::Result<()> {
                 let _ = nodes::scale_node_group(ng, 0);
             }
 
+            // 5b. Scale observability nodes to 0
+            if let Some(ong) = &cfg.observability_node_group {
+                output::print_action("Scaling observability nodes to 0...");
+                let _ = nodes::scale_node_group(ong, 0);
+            }
+
             // 6. Wait for gateway/webhook to stabilize at 1/1
             output::print_action("Waiting for infrastructure to stabilize (30s)...");
             std::thread::sleep(std::time::Duration::from_secs(30));

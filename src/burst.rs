@@ -433,6 +433,22 @@ pub fn apply_infrastructure_patches(
         }
     }
 
+    // Gateway memory override
+    if scenario.gateway_memory_request.is_some() || scenario.gateway_memory_limit.is_some() {
+        let gw_dep = &config.gateway_deployment;
+        let gw_name = &config.gateway_container_name;
+        let req = scenario.gateway_memory_request.as_deref().unwrap_or("256Mi");
+        let limit = scenario.gateway_memory_limit.as_deref().unwrap_or("512Mi");
+        crate::output::print_action(&format!("Setting GW memory: request={req}, limit={limit}"));
+        let patch = serde_json::to_string(&serde_json::json!({
+            "spec": {"template": {"spec": {"containers": [{
+                "name": gw_name,
+                "resources": {"requests": {"memory": req}, "limits": {"memory": limit}}
+            }]}}}
+        }))?;
+        kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
+    }
+
     Ok(())
 }
 

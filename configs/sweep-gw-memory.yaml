@@ -1,0 +1,93 @@
+# GW memory sweep — find minimum safe memory limit
+# With live observability: query GW goroutines, GC pauses, heap allocation
+# via Grafana MCP during burst.
+#
+# Run: burst-forge flow sweep-gw-memory
+# Monitor: kubectl port-forward -n observability svc/grafana 3001:3000
+# Query:   go_goroutines (via pprof), process_resident_memory_bytes, akeyless_gw_*
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 3
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"
+scenarios:
+  - name: "mem-512mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+    gateway_memory_limit: "512Mi"
+
+  - name: "mem-768mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+    gateway_memory_limit: "768Mi"
+
+  - name: "mem-1gi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+    gateway_memory_limit: "1Gi"
+
+  - name: "mem-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+    gateway_memory_limit: "1536Mi"
