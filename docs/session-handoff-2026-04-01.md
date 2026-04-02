@@ -53,8 +53,29 @@ admission serialization — 12 webhooks create admission queue contention. Injec
 stalled at ~484 pods for 60s during the no-limit scenario, consistent with API
 server admission saturation.
 
-**Recommendation:** Keep WH=3. Do not scale horizontally. Node isolation (Test 3)
-is the only path to testing higher WH counts without API server contention.
+**Contention curve (500 pods, WH=3→12, default CPU):**
+WH=3: 76.5s | WH=4: 70.0s | **WH=5: 62.6s** | WH=6: 63.1s | WH=8: 107.7s | WH=10: STUCK | WH=12: 170.0s
+
+**WH=5 validation (WH=3 vs WH=5 at two scales):**
+- 300 pods: WH=3 wins (48.9s vs 73.7s) — less overhead at low scale
+- 1000 pods: WH=5 wins (109.4s vs 147.4s, **+26%**)
+
+**Recommendation:** WH optimal is scale-dependent:
+- ≤300 pods: WH=3 (Cerebras customer stays at 3)
+- ≥500 pods: WH=5 (new recommendation for large bursts)
+- Never exceed WH=6 on shared nodes
+
+### Cerebras-Optimal Validation (all scales confirmed)
+| Scale | GW | WH | Time (s) | 100% injected |
+|-------|----|----|----------|---------------|
+| 1000 | 15 | 3 | 146.7 | yes |
+| 750 | 11 | 3 | 107.4 | yes |
+| 500 | 8 | 3 | 86.9 | yes |
+| 300 | 5 | 3 | 48.8 | yes |
+| 150 | 3 | 2 | 36.6 | yes |
+| 50 | 1 | 1 | 24.3 | yes |
+
+Published: https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3978952714
 
 ### GW CPU Test (COMPLETE — bottleneck #15 confirmed: QPS, not CPU)
 `burst-forge flow investigate-gw-cpu` — all 3 scenarios succeeded after container
