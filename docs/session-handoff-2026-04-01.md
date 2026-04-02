@@ -35,14 +35,25 @@ Built for ASM-17583 (Cerebras customer needs ~300 concurrent pod injections via 
 
 ## What's In Progress
 
-### WH Limit Sweep (INCONCLUSIVE — needs re-run)
-`burst-forge flow investigate-wh-limit-sweep` — ran 5 scenarios but max_nodes=10
-capped all at 550/1000 pods. At 550 pods the system is node-bound, not gateway-bound.
-All 5 scenarios produced identical throughput (0.904-0.911 pods/s) — the test didn't
-reach the gateway bottleneck point.
+### WH Limit Sweep (COMPLETE — bottleneck #16: admission contention)
+Re-ran with max_nodes=20. All 5 scenarios completed 1000/1000 with meaningful data:
 
-**Fix applied:** max_nodes changed to 20. Needs re-run to get meaningful data.
-Published (inconclusive): https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3978395670
+| Scenario | WH | CPU Limit | Time (s) | pods/s | vs baseline |
+|----------|-----|-----------|----------|--------|-------------|
+| baseline-3wh-200m | 3 | 200m | 136.2 | 7.3 | — |
+| 12wh-50m | 12 | 50m | 149.4 | 6.7 | -8% |
+| 12wh-100m | 12 | 100m | 313.0 | 3.2 | -56% |
+| 12wh-no-limit | 12 | none | 266.9 | 3.7 | -49% |
+| 12wh-200m | 12 | 200m | 230.6 | 4.3 | -41% |
+
+**Finding:** WH penalty is NOT CFS throttling. More CPU per WH makes it *worse*.
+50m (most constrained) is fastest at WH=12. Root cause is API server mutating
+admission serialization — 12 webhooks create admission queue contention. Injection
+stalled at ~484 pods for 60s during the no-limit scenario, consistent with API
+server admission saturation.
+
+**Recommendation:** Keep WH=3. Do not scale horizontally. Node isolation (Test 3)
+is the only path to testing higher WH counts without API server contention.
 
 ### GW CPU Test (COMPLETE — bottleneck #15 confirmed: QPS, not CPU)
 `burst-forge flow investigate-gw-cpu` — all 3 scenarios succeeded after container
