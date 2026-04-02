@@ -1,0 +1,93 @@
+# Test 3: Node isolation — dedicated nodes for GW/WH
+# Hypothesis: dedicated webhook nodes eliminate CFS throttling penalty,
+# allowing higher WH counts to improve throughput instead of degrading it.
+#
+# Prerequisites:
+#   1. Create EKS node group "scale-test-webhook-workers" (t3.xlarge, label role=webhook,
+#      taint webhook-only=true:NoSchedule)
+#   2. Add tolerations + nodeSelector to GW/WH HelmRelease postRenderers in k8s repo
+#   3. Verify GW/WH pods schedule on webhook nodes only
+#
+# Run with: burst-forge flow test-3-node-isolation
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 15
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 3
+  baseline: 3
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"
+scenarios:
+  # Baseline: shared nodes, 3 WH (known-good)
+  - name: "shared-3wh"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 3
+
+  # Isolated: dedicated nodes, 3 WH (compare against baseline)
+  # Should match or beat shared if no CPU contention
+  - name: "isolated-3wh"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 3
+
+  # Isolated: dedicated nodes, 6 WH (was degraded on shared nodes)
+  # If isolation works, 6 WH should be faster than 3 WH
+  - name: "isolated-6wh"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 6
+
+  # Isolated: dedicated nodes, 12 WH (maximum test)
+  # On shared nodes this was slower than 3 WH due to CFS throttling
+  - name: "isolated-12wh"
+    replicas: 1000
+    gateway_replicas: 11
+    webhook_replicas: 12

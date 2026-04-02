@@ -71,20 +71,28 @@ Published: https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895
 4. **Flux backoff:** 2x poll interval on kubectl errors
 5. **14 unit tests:** rate functions, config defaults, all 21 YAML configs parse
 
-### Pangea State Alignment (analyzed — needs 30-min import session)
-The Pangea code has been updated with burst node group + /20 subnets but NOT applied.
-Ad-hoc AWS resources exist. **DO NOT run `pangea apply`** — it will try to create
-resources that already exist and fail.
+### Pangea State Alignment (BLOCKED — gem dependency fix needed)
 
-**Safe path:** terraform import the 5 ad-hoc resources into Pangea state:
+**Blocker:** The eks-scale-test workspace flake can't resolve `pangea-architectures`
+gem because:
+1. `eks_scale_test.rb` was missing `require 'pangea/architectures'` (FIXED)
+2. Gemfile was missing transitive deps (pangea-splunk, etc.) (FIXED — bundix done)
+3. **Root cause:** The workspace flake's `self` only captures `workspaces/eks-scale-test/`
+   but `pangea-architectures` is a `path: '../..'` gem pointing to the repo root.
+   The Nix build can't resolve this relative path outside the flake source tree.
+
+**Fix needed:** Either restructure the flake to use the parent repo as source,
+or publish pangea-architectures to a gem server so the workspace doesn't need
+path dependencies.
+
+**Once unblocked**, the 5 imports with now-known IDs:
 ```bash
-terraform import aws_eks_node_group.scale-test-burst scale-test:scale-test-burst
-terraform import aws_subnet.scale-test-pods-0 subnet-0a9f66f70b24b1fed
-terraform import aws_subnet.scale-test-pods-1 subnet-076e7e717c6390e53
-terraform import aws_route_table_association.scale-test-pods-0 <rtbassoc-id>
-terraform import aws_route_table_association.scale-test-pods-1 <rtbassoc-id>
+tofu import aws_eks_node_group.scale-test-burst scale-test:scale-test-burst
+tofu import aws_subnet.scale-test-pods-0 subnet-0a9f66f70b24b1fed
+tofu import aws_subnet.scale-test-pods-1 subnet-076e7e717c6390e53
+tofu import aws_route_table_association.scale-test-pods-0 rtbassoc-0656f91fa101949b0
+tofu import aws_route_table_association.scale-test-pods-1 rtbassoc-0ca1da76fa50b7d95
 ```
-After import: `pangea plan` should show no changes.
 State bucket: s3://pleme-dev-terraform-state/pangea/eks-scale-test
 
 ## Cluster State
