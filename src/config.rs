@@ -520,3 +520,67 @@ pub fn discover(explicit_path: Option<&str>) -> anyhow::Result<Config> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_from_empty_json() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.namespace, "scale-test");
+        assert_eq!(cfg.deployment, "nginx-burst");
+        assert_eq!(cfg.timeout_secs, 600);
+        assert_eq!(cfg.poll_interval_secs, 5);
+        assert_eq!(cfg.cooldown_secs, 15);
+        assert_eq!(cfg.drain_timeout_secs, 120);
+        assert_eq!(cfg.init_container_name, "customer-init");
+        assert_eq!(cfg.workload_container_name, "nginx");
+        assert_eq!(cfg.webhook_container_name, "akeyless-secrets-injection");
+        assert_eq!(cfg.gateway_container_name, "api-gateway");
+        assert_eq!(cfg.secret_path_prefix, "/pleme/test/hello");
+    }
+
+    #[test]
+    fn resolved_pod_label_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.resolved_pod_label(), "app=nginx-burst");
+    }
+
+    #[test]
+    fn resolved_pod_label_override() {
+        let cfg: Config =
+            serde_json::from_str(r#"{"pod_label": "custom=label"}"#).unwrap();
+        assert_eq!(cfg.resolved_pod_label(), "custom=label");
+    }
+
+    #[test]
+    fn scenario_defaults() {
+        let s: Scenario = serde_json::from_str(r#"{"name":"test"}"#).unwrap();
+        assert_eq!(s.replicas, 50);
+        assert_eq!(s.gateway_replicas, 1);
+        assert_eq!(s.webhook_replicas, 1);
+        assert!(s.init_sleep_secs.is_none());
+        assert!(s.expected_secrets.is_none());
+    }
+
+    #[test]
+    fn all_configs_parse() {
+        let configs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("configs");
+        if !configs_dir.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(&configs_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "yaml") {
+                let result = discover(Some(&path.to_string_lossy()));
+                assert!(
+                    result.is_ok(),
+                    "Failed to parse {}: {}",
+                    path.display(),
+                    result.unwrap_err()
+                );
+            }
+        }
+    }
+}

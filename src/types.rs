@@ -115,6 +115,8 @@ pub struct MatrixReport {
     pub scenarios: Vec<ScenarioResult>,
 }
 
+// --- Shared rate functions ---
+
 /// Calculate the injection success rate as a percentage.
 /// Returns 0.0 when running is 0 (no pods to measure against).
 #[must_use]
@@ -135,5 +137,54 @@ pub fn throughput_per_sec(count: u32, elapsed_ms: u64) -> f64 {
         f64::from(count) / (elapsed_ms as f64 / 1000.0)
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn injection_rate_full() {
+        let rate = injection_rate(100, 100);
+        assert!((rate - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn injection_rate_partial() {
+        let rate = injection_rate(100, 50);
+        assert!((rate - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn injection_rate_zero_running() {
+        assert!((injection_rate(0, 50)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn injection_rate_zero_injected() {
+        assert!((injection_rate(100, 0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn throughput_1000ms() {
+        let t = throughput_per_sec(100, 1000);
+        assert!((t - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn throughput_500ms() {
+        let t = throughput_per_sec(100, 500);
+        assert!((t - 200.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn throughput_zero_time() {
+        assert!((throughput_per_sec(100, 0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn throughput_zero_count() {
+        assert!((throughput_per_sec(0, 1000)).abs() < f64::EPSILON);
     }
 }
