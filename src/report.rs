@@ -350,6 +350,29 @@ fn base64_encode(input: &str) -> String {
     result
 }
 
+/// Export matrix results to JSON file in the configured output directory.
+///
+/// Writes `results-{sanitized-timestamp}.json` with the full `MatrixReport`.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be created or the file cannot be written.
+pub fn export_json(report: &MatrixReport, output_dir: &str) -> anyhow::Result<String> {
+    std::fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create output directory: {output_dir}"))?;
+
+    let safe_ts = report.timestamp.replace(':', "-").replace('+', "p");
+    let filename = format!("results-{safe_ts}.json");
+    let path = std::path::Path::new(output_dir).join(&filename);
+
+    let json = serde_json::to_string_pretty(report)
+        .context("Failed to serialize MatrixReport")?;
+    std::fs::write(&path, &json)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

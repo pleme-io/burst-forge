@@ -312,6 +312,11 @@ fn main() -> anyhow::Result<()> {
             output::print_phase("Matrix Report");
             println!("{}", serde_json::to_string_pretty(&matrix_report)?);
 
+            if let Some(dir) = &cfg.output_dir {
+                let path = report::export_json(&matrix_report, dir)?;
+                output::print_status(&format!("Results exported to {path}"));
+            }
+
             // Publish to Confluence if configured — failure is fatal
             if let Some(conf) = &cfg.confluence {
                 publish_report(conf, &matrix_report, &cfg)?;
@@ -466,6 +471,11 @@ fn main() -> anyhow::Result<()> {
 
             output::print_phase("Matrix Report");
             println!("{}", serde_json::to_string_pretty(&matrix_report)?);
+
+            if let Some(dir) = &cfg.output_dir {
+                let path = report::export_json(&matrix_report, dir)?;
+                output::print_status(&format!("Results exported to {path}"));
+            }
 
             if let Some(conf) = &cfg.confluence {
                 publish_report(conf, &matrix_report, &cfg)?;

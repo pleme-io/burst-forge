@@ -306,6 +306,11 @@ pub struct Config {
     #[serde(default)]
     pub confluence: Option<ConfluenceConfig>,
 
+    /// Directory for JSON/CSV result export. When set, writes
+    /// `results-{timestamp}.json` after each matrix run.
+    #[serde(default)]
+    pub output_dir: Option<String>,
+
     /// Reset phase configuration (Phase 1).
     #[serde(default)]
     pub reset: ResetConfig,

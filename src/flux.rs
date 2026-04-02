@@ -47,13 +47,15 @@ pub fn wait_for_kustomizations(
                     output::print_flux_ready(ks_name, elapsed);
                     break;
                 }
-                Ok(false) => {}
+                Ok(false) => {
+                    std::thread::sleep(poll);
+                }
                 Err(e) => {
                     output::print_warning(&format!("{ks_name}: error checking status: {e}"));
+                    // Back off on errors to avoid hammering a struggling API server
+                    std::thread::sleep(poll * 2);
                 }
             }
-
-            std::thread::sleep(poll);
         }
     }
 
