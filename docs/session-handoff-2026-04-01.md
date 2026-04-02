@@ -17,14 +17,16 @@ Built for ASM-17583 (Cerebras customer needs ~300 concurrent pod injections via 
 - Gateway at QPS=5 is the permanent throughput ceiling
 - GW formula: `ceil(pods / 67)` for sub-90s at QPS=5
 - WH: scale-dependent — WH=3 for ≤300 pods, WH=5 for ≥500 pods (contention cliff at WH=8)
-- **ROOT CAUSE (Bottleneck #17): Proactive cache subprocess bug in GW.**
-  `curl_proxy/proactive_cache.go:157` creates `ProxyCmd{}` with `cliDirect=false`
-  (Go zero value), bypassing `useCLIDirectly`. Background cache refresh goroutines
-  spawn `timeout --signal SIGKILL 30 akeyless <cmd>` subprocesses even when the
-  default config is in-process direct mode. Under burst, these subprocesses exceed
-  30s and get SIGKILL'd (207-459 kills per burst), causing SaaS connectivity cycling
-  and injection stalls. Fix: set `cliDirect: useCLIDirectly` on ProxyCmd in
-  proactive_cache.go. Mitigations: `PROACTIVE_CACHE_WORKERS=1` or disable proactive cache.
+- **ROOT CAUSE (Bottleneck #17): GW memory limit.** Default 512Mi is insufficient —
+  GW hits 493-505Mi during burst. The 30s subprocess timeout fires because GC pressure
+  slows execution. Increasing to 1Gi: WH=12/GW=8 drops from 272s→102.6s (62% faster).
+  WH=12/GW=15/1Gi at 69.4s beats WH=3/GW=8 at 80.5s — **the WH cliff disappears.**
+- **Code bug found (secondary):** proactive_cache.go:157 creates ProxyCmd with
+  cliDirect=false, spawning subprocesses. But this is secondary to the memory constraint.
+- **GW internal architecture:** Container runs 2 Go binaries (api-proxy + curl_proxy)
+  via supervisord. curl_proxy handles /v2/* API. Default mode = in-process direct CLI.
+  30s timeout wraps subprocess calls with SIGKILL. Memory pressure → GC pauses →
+  subprocess timeout → kills → connectivity cycling → injection stalls.
 - Agent CPU: 25m request / 100m limit (default 250m blocks scheduling)
 - CRASH_POD_ON_ERROR: disable (necessary for burst workloads)
 - webhookTimeoutSeconds: 30 (10s rejects 92% of pods)
@@ -141,6 +143,27 @@ State bucket: s3://pleme-dev-terraform-state/pangea/eks-scale-test
 - **workers:** 3 × t3.medium
 - **system:** 1 × t3.medium
 - **Idle cost:** ~$4/day when burst=0
+
+## PAUSED: Need Observability Upgrades Before Continuing
+
+Current approach (kubectl top every 10s + log grep) is insufficient.
+We can't see per-request latency, GC pressure, goroutine counts, or
+memory allocation patterns during burst. Need proper telemetry pipeline.
+
+**Before next experiments, burst-forge needs:**
+1. Observability stack on scale-test cluster (VictoriaMetrics + Vector + Grafana)
+2. MCP-queryable metrics (PromQL via Grafana MCP tools)
+3. GW Go runtime metrics (goroutines, GC pauses, heap allocation)
+4. Per-request latency histograms (possibly via envoy sidecar or GW /metrics endpoint)
+
+**Once observable, remaining experiments:**
+- GW memory sweep (640Mi, 768Mi, 1Gi, 1.5Gi) to find minimum safe limit
+- WH contention curve rerun with optimal memory
+- GW replica sweep at WH=12 with optimal memory
+- Final cerebras validation with optimal params
+
+**GW HelmRelease state:** Memory limit set to 1Gi (for testing). Revert to 512Mi
+if not running experiments. Currently reverted for cost savings.
 
 ## Key Files
 
