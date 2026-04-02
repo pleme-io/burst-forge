@@ -16,7 +16,8 @@ Built for ASM-17583 (Cerebras customer needs ~300 concurrent pod injections via 
 ### Key Findings
 - Gateway at QPS=5 is the permanent throughput ceiling
 - GW formula: `ceil(pods / 67)` for sub-90s at QPS=5
-- WH: keep at 3 on shared nodes (more WH = slower due to CPU limit overcommitment via CFS throttling)
+- WH: scale-dependent — WH=3 for ≤300 pods, WH=5 for ≥500 pods (contention cliff at WH=8)
+- WH penalty is API server admission contention, NOT CFS throttling (more CPU makes it worse)
 - Agent CPU: 25m request / 100m limit (default 250m blocks scheduling)
 - CRASH_POD_ON_ERROR: disable (necessary for burst workloads)
 - webhookTimeoutSeconds: 30 (10s rejects 92% of pods)
