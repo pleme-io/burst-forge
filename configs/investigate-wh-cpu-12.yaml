@@ -37,7 +37,7 @@ node_group:
   region: us-east-1
   aws_profile: akeyless-development
   pods_per_node: 58
-  max_nodes: 10
+  max_nodes: 20
 worker_node_group:
   cluster_name: scale-test
   nodegroup_name: scale-test-workers

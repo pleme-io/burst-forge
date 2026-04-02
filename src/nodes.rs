@@ -444,11 +444,10 @@ pub fn wait_for_zero_burst_nodes(
         }
 
         if start.elapsed() > timeout {
-            output::print_warning(&format!(
+            anyhow::bail!(
                 "Burst node teardown incomplete: {count} nodes in {nodegroup_name} after {}s",
                 timeout.as_secs()
-            ));
-            return Ok(());
+            );
         }
 
         #[allow(clippy::cast_possible_truncation)]

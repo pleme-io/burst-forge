@@ -297,7 +297,7 @@ pub fn publish_to_confluence(
 
     let status: u16 = status_str.parse().unwrap_or(0);
 
-    if status != 200 {
+    if !(200..300).contains(&status) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
             "Confluence API returned HTTP {status}\nBody: {body}\nStderr: {stderr}"

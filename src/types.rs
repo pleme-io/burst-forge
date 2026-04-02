@@ -114,3 +114,26 @@ pub struct MatrixReport {
     pub timestamp: String,
     pub scenarios: Vec<ScenarioResult>,
 }
+
+/// Calculate the injection success rate as a percentage.
+/// Returns 0.0 when running is 0 (no pods to measure against).
+#[must_use]
+pub fn injection_rate(running: u32, injected: u32) -> f64 {
+    if running > 0 {
+        f64::from(injected) / f64::from(running) * 100.0
+    } else {
+        0.0
+    }
+}
+
+/// Calculate throughput (items per second) from a count and duration in milliseconds.
+/// Returns 0.0 when `elapsed_ms` is 0.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn throughput_per_sec(count: u32, elapsed_ms: u64) -> f64 {
+    if elapsed_ms > 0 {
+        f64::from(count) / (elapsed_ms as f64 / 1000.0)
+    } else {
+        0.0
+    }
+}

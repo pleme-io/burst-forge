@@ -124,20 +124,10 @@ pub fn run_burst(
         );
 
         if running >= replicas {
-            let rate = injection_rate(running, injected);
+            let rate = crate::types::injection_rate(running, injected);
             output::print_burst_complete(running, replicas, elapsed_ms, rate);
-            #[allow(clippy::cast_precision_loss)]
-            let admission_rate = if elapsed_ms > 0 {
-                f64::from(injected) / (elapsed_ms as f64 / 1000.0)
-            } else {
-                0.0
-            };
-            #[allow(clippy::cast_precision_loss)]
-            let gw_throughput = if elapsed_ms > 0 {
-                f64::from(running) / (elapsed_ms as f64 / 1000.0)
-            } else {
-                0.0
-            };
+            let admission_rate = crate::types::throughput_per_sec(injected, elapsed_ms);
+            let gw_throughput = crate::types::throughput_per_sec(running, elapsed_ms);
             return Ok(BurstResult {
                 timestamp,
                 replicas_requested: replicas,
@@ -189,18 +179,8 @@ pub fn run_burst(
 
     #[allow(clippy::cast_possible_truncation)]
     let final_elapsed_ms = burst_start.elapsed().as_millis() as u64;
-    #[allow(clippy::cast_precision_loss)]
-    let admission_rate = if final_elapsed_ms > 0 {
-        f64::from(injected) / (final_elapsed_ms as f64 / 1000.0)
-    } else {
-        0.0
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let gw_throughput = if final_elapsed_ms > 0 {
-        f64::from(running) / (final_elapsed_ms as f64 / 1000.0)
-    } else {
-        0.0
-    };
+    let admission_rate = crate::types::throughput_per_sec(injected, final_elapsed_ms);
+    let gw_throughput = crate::types::throughput_per_sec(running, final_elapsed_ms);
 
     Ok(BurstResult {
         timestamp,
@@ -209,7 +189,7 @@ pub fn run_burst(
         pods_failed: failed,
         pods_pending: pending,
         pods_injected: injected,
-        injection_success_rate: injection_rate(running, injected),
+        injection_success_rate: crate::types::injection_rate(running, injected),
         time_to_first_ready_ms: first_ready_time.unwrap_or(0),
         time_to_all_ready_ms: None,
         time_to_full_admission_ms: full_admission_time,
@@ -258,7 +238,7 @@ fn count_pod_states(
 }
 
 /// Check whether a single pod shows evidence of secret injection.
-fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
+pub(crate) fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
     use crate::config::InjectionMode;
 
     let containers = pod["spec"]["containers"].as_array();
@@ -289,7 +269,7 @@ fn has_injection(pod: &serde_json::Value, config: &Config) -> bool {
 
 /// Count individual injected secrets per pod (env vars matching prefix).
 /// Returns the total count across all containers.
-fn injection_secret_count(pod: &serde_json::Value, config: &Config) -> u32 {
+pub(crate) fn injection_secret_count(pod: &serde_json::Value, config: &Config) -> u32 {
     let Some(containers) = pod["spec"]["containers"].as_array() else {
         return 0;
     };
@@ -429,11 +409,3 @@ pub fn apply_infrastructure_patches(
     Ok(())
 }
 
-/// Calculate the injection success rate as a percentage.
-fn injection_rate(running: u32, injected: u32) -> f64 {
-    if running > 0 {
-        f64::from(injected) / f64::from(running) * 100.0
-    } else {
-        0.0
-    }
-}
