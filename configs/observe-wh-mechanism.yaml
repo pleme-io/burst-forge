@@ -1,0 +1,62 @@
+# Definitive WH mechanism observation
+# Two scenarios with full metrics collection running in parallel.
+# Keep at 500 pods (mid-range where both WH=3 and WH=12 complete).
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 3
+  baseline: 3
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+scenarios:
+  - name: "observe-wh3"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+
+  - name: "observe-wh12"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 12
