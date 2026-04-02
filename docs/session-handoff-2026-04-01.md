@@ -17,11 +17,14 @@ Built for ASM-17583 (Cerebras customer needs ~300 concurrent pod injections via 
 - Gateway at QPS=5 is the permanent throughput ceiling
 - GW formula: `ceil(pods / 67)` for sub-90s at QPS=5
 - WH: scale-dependent — WH=3 for ≤300 pods, WH=5 for ≥500 pods (contention cliff at WH=8)
-- **ROOT CAUSE (Bottleneck #17): GW subprocess killing.** GW spawns curl subprocesses
-  for health checks + API calls. Under concurrent load, GW kills its own children
-  (207-459 kills per burst). This is GW-INTERNAL — not resource exhaustion (confirmed:
-  dedicated nodes with 33% CPU free still produced 459 kills, and performed WORSE).
-  Dedicated nodes: WH=12 took 461.7s vs 164s on shared nodes.
+- **ROOT CAUSE (Bottleneck #17): Proactive cache subprocess bug in GW.**
+  `curl_proxy/proactive_cache.go:157` creates `ProxyCmd{}` with `cliDirect=false`
+  (Go zero value), bypassing `useCLIDirectly`. Background cache refresh goroutines
+  spawn `timeout --signal SIGKILL 30 akeyless <cmd>` subprocesses even when the
+  default config is in-process direct mode. Under burst, these subprocesses exceed
+  30s and get SIGKILL'd (207-459 kills per burst), causing SaaS connectivity cycling
+  and injection stalls. Fix: set `cliDirect: useCLIDirectly` on ProxyCmd in
+  proactive_cache.go. Mitigations: `PROACTIVE_CACHE_WORKERS=1` or disable proactive cache.
 - Agent CPU: 25m request / 100m limit (default 250m blocks scheduling)
 - CRASH_POD_ON_ERROR: disable (necessary for burst workloads)
 - webhookTimeoutSeconds: 30 (10s rejects 92% of pods)
