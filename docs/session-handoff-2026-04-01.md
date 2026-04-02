@@ -44,18 +44,32 @@ reach the gateway bottleneck point.
 **Fix applied:** max_nodes changed to 20. Needs re-run to get meaningful data.
 Published (inconclusive): https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3978395670
 
-### GW CPU Test (partial — container name bug)
-`burst-forge flow investigate-gw-cpu` — scenario 1 (500m baseline) succeeded:
-1000/1000 in 153.8s, 6.5 pods/s. Scenarios 2-3 (1000m and no-limit) failed
-because apply_infrastructure_patches uses wrong container name for GW.
+### GW CPU Test (COMPLETE — bottleneck #15 confirmed: QPS, not CPU)
+`burst-forge flow investigate-gw-cpu` — all 3 scenarios succeeded after container
+name fix (`akeyless-api-gateway` → `api-gateway`).
 
-**Bug:** The strategic merge patch hardcodes `"name":"akeyless-api-gateway"` but
-the actual container name in the GW deployment is different (likely `akeyless-api-gw`
-or similar — need to check). The patch creates a NEW container entry instead of
-merging, breaking the deployment spec.
+| Scenario | GW CPU Limit | Time (s) | Throughput (pods/s) |
+|----------|-------------|----------|---------------------|
+| gw-500m | 500m | 153.8 | 6.5 |
+| gw-1000m | 1000m | 142.5 | 7.0 |
+| gw-no-limit | none | 147.9 | 6.8 |
 
-**Fix needed:** Query the deployment to get the actual container name, or check
-the HelmRelease to find the correct name. Then re-run.
+**Finding:** GW CPU has minimal effect. Doubling limit gained only 7.7%.
+Removing limit entirely was slightly *slower* than 1000m. **QPS=5 is the
+permanent throughput ceiling, not CPU.** The GW is network/API-bound.
+
+Published: https://akeyless.atlassian.net/wiki/spaces/~7120203936f1d3939b4810895c20eb2bc58ae4/pages/3979575298
+
+### burst-forge Code Improvements (this session)
+5 commits of improvements:
+1. **Critical bugs fixed:** teardown timeout returns Err (was silent Ok), rate
+   calc dedup (4→2 shared functions), Job secret counting wired, HTTP 200-299
+2. **Configurable container names:** init_container_name, workload_container_name,
+   webhook_container_name, gateway_container_name, secret_path_prefix — all with
+   backward-compatible defaults. JSON patches use serde_json::json!() now.
+3. **JSON export:** `output_dir` config field writes results-{timestamp}.json
+4. **Flux backoff:** 2x poll interval on kubectl errors
+5. **14 unit tests:** rate functions, config defaults, all 21 YAML configs parse
 
 ### Pangea State Alignment (analyzed — needs 30-min import session)
 The Pangea code has been updated with burst node group + /20 subnets but NOT applied.
