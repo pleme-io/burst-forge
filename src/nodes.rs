@@ -371,8 +371,9 @@ pub fn scale_worker_group(config: &WorkerNodeGroupConfig, desired: u32) -> anyho
         config.nodegroup_name
     ));
 
+    let max = config.max_nodes;
     let scaling_config = format!(
-        "minSize={min},maxSize=6,desiredSize={desired}",
+        "minSize={min},maxSize={max},desiredSize={desired}",
         min = desired.min(3),
     );
 

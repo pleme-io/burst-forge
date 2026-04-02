@@ -93,10 +93,14 @@ pub struct WorkerNodeGroupConfig {
     /// Baseline worker count to return to after experiments.
     #[serde(default = "default_worker_baseline")]
     pub baseline: u32,
+    /// Max worker node group size (used in AWS scaling config).
+    #[serde(default = "default_worker_max_nodes")]
+    pub max_nodes: u32,
 }
 
 fn default_worker_desired() -> u32 { 3 }
 fn default_worker_baseline() -> u32 { 3 }
+fn default_worker_max_nodes() -> u32 { 6 }
 
 /// Image cache configuration for Zot registry lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +281,27 @@ pub struct Config {
     #[serde(default = "default_injection_env_prefix")]
     pub injection_env_prefix: String,
 
+    /// Container name for the init container in scenario patches.
+    #[serde(default = "default_init_container_name")]
+    pub init_container_name: String,
+
+    /// Container name for the main workload container in scenario patches.
+    #[serde(default = "default_workload_container_name")]
+    pub workload_container_name: String,
+
+    /// Container name inside the webhook deployment (for CPU patches).
+    #[serde(default = "default_webhook_container_name")]
+    pub webhook_container_name: String,
+
+    /// Container name inside the gateway deployment (for CPU patches).
+    #[serde(default = "default_gateway_container_name")]
+    pub gateway_container_name: String,
+
+    /// Secret path prefix for multi-secret injection patches.
+    /// First secret uses this path exactly; additional secrets append the index.
+    #[serde(default = "default_secret_path_prefix")]
+    pub secret_path_prefix: String,
+
     /// Confluence reporting — auto-publish results after matrix run.
     #[serde(default)]
     pub confluence: Option<ConfluenceConfig>,
@@ -444,6 +469,11 @@ fn default_webhook_label() -> String { String::new() }
 fn default_gateway_release() -> String { String::new() }
 fn default_webhook_release() -> String { String::new() }
 fn default_injection_env_prefix() -> String { "AKEYLESS_".to_string() }
+fn default_init_container_name() -> String { "customer-init".to_string() }
+fn default_workload_container_name() -> String { "nginx".to_string() }
+fn default_webhook_container_name() -> String { "akeyless-secrets-injection".to_string() }
+fn default_gateway_container_name() -> String { "api-gateway".to_string() }
+fn default_secret_path_prefix() -> String { "/pleme/test/hello".to_string() }
 fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 fn default_image_cache_namespace() -> String { "image-cache".to_string() }
 fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_string() }

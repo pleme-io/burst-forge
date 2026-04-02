@@ -310,41 +310,56 @@ pub fn apply_scenario_patches(
         "echo customer-init-complete".to_string()
     };
     crate::output::print_action(&format!("Setting init container: {init_cmd}"));
-    let patch = format!(
-        r#"{{"spec":{{"template":{{"spec":{{"initContainers":[{{"name":"customer-init","command":["sh","-c","{init_cmd}"]}}]}}}}}}}}"#
-    );
+    let patch = serde_json::to_string(&serde_json::json!({
+        "spec": {"template": {"spec": {"initContainers": [{
+            "name": &config.init_container_name,
+            "command": ["sh", "-c", &init_cmd]
+        }]}}}
+    }))?;
     kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
 
     // Memory request/limit: always set to ensure inter-scenario isolation
+    let container_name = &config.workload_container_name;
     if let Some(mem) = &scenario.pod_memory_request {
         let limit = scenario.pod_memory_limit.as_deref().unwrap_or(mem);
         crate::output::print_action(&format!("Setting pod memory: request={mem}, limit={limit}"));
-        let patch = format!(
-            r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"nginx","resources":{{"requests":{{"memory":"{mem}"}},"limits":{{"memory":"{limit}"}}}}}}]}}}}}}}}"#
-        );
+        let patch = serde_json::to_string(&serde_json::json!({
+            "spec": {"template": {"spec": {"containers": [{
+                "name": container_name,
+                "resources": {"requests": {"memory": mem}, "limits": {"memory": limit}}
+            }]}}}
+        }))?;
         kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
     } else {
         // Reset to baseline (16Mi/64Mi from deployment template)
-        let patch = r#"{"spec":{"template":{"spec":{"containers":[{"name":"nginx","resources":{"requests":{"memory":"16Mi"},"limits":{"memory":"64Mi"}}}]}}}}"#;
-        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", patch])?;
+        let patch = serde_json::to_string(&serde_json::json!({
+            "spec": {"template": {"spec": {"containers": [{
+                "name": container_name,
+                "resources": {"requests": {"memory": "16Mi"}, "limits": {"memory": "64Mi"}}
+            }]}}}
+        }))?;
+        kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
     }
 
     // Secret count: patch the akeyless/secret-path annotation with N comma-separated paths
     if let Some(secret_count) = scenario.expected_secrets {
+        let prefix = &config.secret_path_prefix;
         let paths: Vec<String> = (1..=secret_count)
             .map(|i| {
                 if i == 1 {
-                    "/pleme/test/hello".to_string()
+                    prefix.clone()
                 } else {
-                    format!("/pleme/test/hello{i}")
+                    format!("{prefix}{i}")
                 }
             })
             .collect();
         let secret_path = paths.join(",");
         crate::output::print_action(&format!("Setting {secret_count} secrets: {secret_path}"));
-        let patch = format!(
-            r#"{{"spec":{{"template":{{"metadata":{{"annotations":{{"akeyless/secret-path":"{secret_path}"}}}}}}}}}}"#
-        );
+        let patch = serde_json::to_string(&serde_json::json!({
+            "spec": {"template": {"metadata": {"annotations": {
+                "akeyless/secret-path": &secret_path
+            }}}}
+        }))?;
         kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
     }
 
@@ -365,21 +380,27 @@ pub fn apply_infrastructure_patches(
     // Webhook CPU override
     if scenario.webhook_cpu_request.is_some() || scenario.webhook_cpu_limit.is_some() {
         let wh_dep = &config.webhook_deployment;
+        let wh_name = &config.webhook_container_name;
         let req = scenario.webhook_cpu_request.as_deref().unwrap_or("50m");
         let limit = scenario.webhook_cpu_limit.as_deref().unwrap_or("200m");
 
         if limit == "0" {
-            // Remove CPU limit entirely (burstable QoS)
             crate::output::print_action(&format!("Setting WH CPU: request={req}, limit=NONE"));
-            let patch = format!(
-                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"akeyless-secrets-injection","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{}}}}}}]}}}}}}}}"#
-            );
+            let patch = serde_json::to_string(&serde_json::json!({
+                "spec": {"template": {"spec": {"containers": [{
+                    "name": wh_name,
+                    "resources": {"requests": {"cpu": req}, "limits": {}}
+                }]}}}
+            }))?;
             kubectl.run(&["-n", inj_ns, "patch", "deployment", wh_dep, "--type=strategic", "-p", &patch])?;
         } else {
             crate::output::print_action(&format!("Setting WH CPU: request={req}, limit={limit}"));
-            let patch = format!(
-                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"akeyless-secrets-injection","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{"cpu":"{limit}"}}}}}}]}}}}}}}}"#
-            );
+            let patch = serde_json::to_string(&serde_json::json!({
+                "spec": {"template": {"spec": {"containers": [{
+                    "name": wh_name,
+                    "resources": {"requests": {"cpu": req}, "limits": {"cpu": limit}}
+                }]}}}
+            }))?;
             kubectl.run(&["-n", inj_ns, "patch", "deployment", wh_dep, "--type=strategic", "-p", &patch])?;
         }
     }
@@ -387,21 +408,27 @@ pub fn apply_infrastructure_patches(
     // Gateway CPU override
     if scenario.gateway_cpu_request.is_some() || scenario.gateway_cpu_limit.is_some() {
         let gw_dep = &config.gateway_deployment;
+        let gw_name = &config.gateway_container_name;
         let req = scenario.gateway_cpu_request.as_deref().unwrap_or("100m");
         let limit = scenario.gateway_cpu_limit.as_deref().unwrap_or("500m");
 
         if limit == "0" {
-            // Remove CPU limit entirely (burstable QoS)
             crate::output::print_action(&format!("Setting GW CPU: request={req}, limit=NONE"));
-            let patch = format!(
-                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"api-gateway","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{}}}}}}]}}}}}}}}"#
-            );
+            let patch = serde_json::to_string(&serde_json::json!({
+                "spec": {"template": {"spec": {"containers": [{
+                    "name": gw_name,
+                    "resources": {"requests": {"cpu": req}, "limits": {}}
+                }]}}}
+            }))?;
             kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
         } else {
             crate::output::print_action(&format!("Setting GW CPU: request={req}, limit={limit}"));
-            let patch = format!(
-                r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"api-gateway","resources":{{"requests":{{"cpu":"{req}"}},"limits":{{"cpu":"{limit}"}}}}}}]}}}}}}}}"#
-            );
+            let patch = serde_json::to_string(&serde_json::json!({
+                "spec": {"template": {"spec": {"containers": [{
+                    "name": gw_name,
+                    "resources": {"requests": {"cpu": req}, "limits": {"cpu": limit}}
+                }]}}}
+            }))?;
             kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
         }
     }
