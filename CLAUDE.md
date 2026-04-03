@@ -48,6 +48,7 @@ Phase 3: EXECUTION  -> burst 0->N, poll, measure
 | Module | Purpose |
 |--------|---------|
 | `config.rs` | Shikumi YAML config + flow discovery |
+| `events.rs` | Structured event emission for Shinryū observability |
 | `kubectl.rs` | kubectl subprocess wrapper |
 | `flux.rs` | FluxCD kustomization polling |
 | `verify.rs` | Infrastructure readiness checks |
@@ -59,7 +60,31 @@ Phase 3: EXECUTION  -> burst 0->N, poll, measure
 | `phases.rs` | 3-phase lifecycle with per-phase timing |
 | `report.rs` | Confluence XHTML report generation + REST API publish |
 | `output.rs` | Terminal UI: banners, progress, color, signal handler |
-| `types.rs` | BurstResult, MatrixReport, PhaseTimings, WarmupTimings |
+| `types.rs` | BurstResult, MatrixReport, PhaseTimings, PodDetail, WarmupTimings |
+
+## Structured Events (Shinryū Integration)
+
+burst-forge emits structured JSON events to stderr (captured by Vector
+`kubernetes_logs` source) and optionally POSTs to a Vector HTTP endpoint.
+
+| Event | Where Emitted | Payload |
+|-------|--------------|---------|
+| `MATRIX_START` | matrix.rs | scenario_count |
+| `MATRIX_COMPLETE` | matrix.rs | scenario_count, passed, failed |
+| `PHASE_COMPLETE` | matrix.rs (×3) | phase name, elapsed_ms |
+| `POLL_TICK` | burst.rs (every 5th) | running, pending, failed, injected, elapsed_ms |
+| `MILESTONE` | burst.rs | FIRST_READY, 50PCT_RUNNING, FULL_ADMISSION |
+| `BURST_COMPLETE` | matrix.rs | Full BurstResult (20+ fields) |
+| `SCENARIO_COMPLETE` | matrix.rs | success/failure, error message |
+| `POD_STATE_DETAIL` | burst.rs | Notable pods: restart_count, state_reason, node |
+
+Configure `vector_endpoint` in your config YAML to enable HTTP POST delivery:
+```yaml
+vector_endpoint: "http://vector.observability.svc:9500"
+```
+
+Events flow through Shinryū → Bronze NDJSON → Silver Parquet → queryable
+via shinryu-mcp DataFusion SQL.
 
 ## Commands
 
