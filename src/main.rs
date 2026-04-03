@@ -7,6 +7,7 @@
 mod burst;
 mod config;
 mod drain;
+mod events;
 mod flux;
 mod gates;
 mod job;
@@ -230,6 +231,18 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(130);
     }).expect("failed to set Ctrl+C handler");
 
+    // Create event emitter for Shinryū observability pipeline
+    let flow_name = match &cli.command {
+        Commands::Flow { name, .. } => name.clone(),
+        Commands::Matrix { .. } => "matrix".to_string(),
+        Commands::Burst { .. } => "burst".to_string(),
+        _ => String::new(),
+    };
+    let emitter = events::EventEmitter::new(
+        events::generate_experiment_id(&flow_name),
+        cfg.vector_endpoint.clone(),
+    );
+
     match cli.command {
         Commands::Verify => {
             output::print_banner("Verify");
@@ -275,6 +288,7 @@ fn main() -> anyhow::Result<()> {
             for i in 1..=iterations {
                 let result = burst::run_burst(
                     &kubectl, &cfg, target_replicas, i, gw_ready, wh_ready,
+                    "burst", &emitter,
                 )?;
 
                 output::print_iteration_results(
@@ -307,7 +321,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             output::print_banner("Scale Matrix");
             let matrix_report =
-                matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling)?;
+                matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling, &emitter)?;
 
             output::print_phase("Matrix Report");
             println!("{}", serde_json::to_string_pretty(&matrix_report)?);
@@ -473,7 +487,7 @@ fn main() -> anyhow::Result<()> {
             // Config already resolved via flow name → configs/{name}.yaml
             output::print_banner(&format!("Flow: {}", config_path.as_deref().unwrap_or("?")));
             let matrix_report =
-                matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling)?;
+                matrix::run_matrix(&kubectl, &cfg, scenario.as_deref(), skip_scaling, &emitter)?;
 
             output::print_phase("Matrix Report");
             println!("{}", serde_json::to_string_pretty(&matrix_report)?);

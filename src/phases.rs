@@ -342,6 +342,7 @@ pub fn run_phase_3_execution(
     kubectl: &KubeCtl,
     config: &Config,
     scenario: &Scenario,
+    emitter: &crate::events::EventEmitter,
 ) -> anyhow::Result<(BurstResult, u64)> {
     output::print_phase("Phase 3: EXECUTION");
     let start = Instant::now();
@@ -354,6 +355,8 @@ pub fn run_phase_3_execution(
             1,
             scenario.gateway_replicas,
             scenario.webhook_replicas,
+            &scenario.name,
+            emitter,
         )?,
         crate::config::WorkloadKind::Job => {
             let template = crate::job::load_template(config)?;

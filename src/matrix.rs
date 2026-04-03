@@ -27,8 +27,11 @@ pub fn run_matrix(
     config: &Config,
     scenario_filter: Option<&str>,
     skip_scaling: bool,
+    emitter: &crate::events::EventEmitter,
 ) -> anyhow::Result<MatrixReport> {
     let timestamp = Utc::now().to_rfc3339();
+
+    emitter.matrix_start(config.scenarios.len());
 
     if config.scenarios.is_empty() {
         anyhow::bail!("No scenarios configured. Add scenarios to your burst-forge.yaml config.");
@@ -92,7 +95,7 @@ pub fn run_matrix(
             scenario.webhook_replicas,
         );
 
-        let result = run_single_scenario(kubectl, config, scenario, skip_scaling);
+        let result = run_single_scenario(kubectl, config, scenario, skip_scaling, emitter);
         results.push(result);
 
         // Inter-scenario cleanup via Phase 1 RESET (skip after last)
@@ -239,6 +242,9 @@ pub fn run_matrix(
         scenarios: results,
     };
 
+    let passed = total_count - failure_count;
+    emitter.matrix_complete(total_count, passed, failure_count);
+
     if failure_count > 0 {
         // Still print the report JSON so the caller has the data
         output::print_phase("Matrix Report (with failures)");
@@ -276,28 +282,42 @@ fn run_single_scenario(
     config: &Config,
     scenario: &crate::config::Scenario,
     skip_scaling: bool,
+    emitter: &crate::events::EventEmitter,
 ) -> ScenarioResult {
     // Phase 1: RESET -- get to verified zero state
     let reset_ms = match phases::run_phase_1_reset(kubectl, config) {
-        Ok(ms) => ms,
+        Ok(ms) => {
+            emitter.phase_complete(&scenario.name, "RESET", ms);
+            ms
+        }
         Err(e) => {
+            emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
             return make_error_result(scenario, format!("Phase 1 RESET failed: {e}"));
         }
     };
 
     // Phase 2: WARMUP -- infrastructure ready
     let warmup_timings = match phases::run_phase_2_warmup(kubectl, config, scenario, skip_scaling) {
-        Ok(t) => t,
+        Ok(t) => {
+            emitter.phase_complete(&scenario.name, "WARMUP", t.total_ms);
+            t
+        }
         Err(e) => {
+            emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
             return make_error_result(scenario, format!("Phase 2 WARMUP failed: {e}"));
         }
     };
 
     // Phase 3: EXECUTION -- burst bandwidth
     let (burst_result, execution_ms) =
-        match phases::run_phase_3_execution(kubectl, config, scenario) {
-            Ok((b, ms)) => (b, ms),
+        match phases::run_phase_3_execution(kubectl, config, scenario, emitter) {
+            Ok((b, ms)) => {
+                emitter.phase_complete(&scenario.name, "EXECUTION", ms);
+                emitter.burst_complete(&scenario.name, &b);
+                (b, ms)
+            }
             Err(e) => {
+                emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
                 return ScenarioResult {
                     name: scenario.name.clone(),
                     replicas: scenario.replicas,
@@ -325,6 +345,8 @@ fn run_single_scenario(
 
     // Print full phase timing summary
     phases::print_scenario_timings(&timings);
+
+    emitter.scenario_complete(&scenario.name, true, None);
 
     ScenarioResult {
         name: scenario.name.clone(),

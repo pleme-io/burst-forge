@@ -27,6 +27,8 @@ pub fn run_burst(
     iteration: u32,
     expected_gw: u32,
     expected_wh: u32,
+    scenario_name: &str,
+    emitter: &crate::events::EventEmitter,
 ) -> anyhow::Result<BurstResult> {
     let start = Instant::now();
     let timestamp = Utc::now().to_rfc3339();
@@ -72,6 +74,7 @@ pub fn run_burst(
     let mut half_running_time: Option<u64> = None;
     let mut peak_running: u32 = 0;
     let mut total_secrets: u32 = 0;
+    let mut poll_count: u32 = 0;
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
     let timeout_duration = Duration::from_secs(config.timeout_secs);
     let app_label = config.resolved_pod_label();
@@ -106,15 +109,24 @@ pub fn run_burst(
 
         if running > 0 && first_ready_time.is_none() {
             first_ready_time = Some(elapsed_ms);
+            emitter.milestone(scenario_name, "FIRST_READY", elapsed_ms, 1);
         }
 
         if running >= half_target && half_running_time.is_none() {
             half_running_time = Some(elapsed_ms);
+            emitter.milestone(scenario_name, "50PCT_RUNNING", elapsed_ms, running);
         }
 
         if injected >= replicas && full_admission_time.is_none() {
             full_admission_time = Some(elapsed_ms);
+            emitter.milestone(scenario_name, "FULL_ADMISSION", elapsed_ms, injected);
         }
+
+        // Emit poll tick every 5th iteration
+        if poll_count % 5 == 0 {
+            emitter.poll_tick(scenario_name, running, pending, failed, injected, elapsed_ms, peak_running);
+        }
+        poll_count += 1;
 
         output::print_progress_ms(
             elapsed_ms,
@@ -126,6 +138,11 @@ pub fn run_burst(
         if running >= replicas {
             let rate = crate::types::injection_rate(running, injected);
             output::print_burst_complete(running, replicas, elapsed_ms, rate);
+            // Emit detailed pod state for notable pods (restarts, failures)
+            let pod_details: Vec<crate::types::PodDetail> = items.iter()
+                .map(|p| crate::types::PodDetail::from_json(p, has_injection(p, config)))
+                .collect();
+            emitter.pod_state_detail(scenario_name, &pod_details);
             let admission_rate = crate::types::throughput_per_sec(injected, elapsed_ms);
             let gw_throughput = crate::types::throughput_per_sec(running, elapsed_ms);
             return Ok(BurstResult {

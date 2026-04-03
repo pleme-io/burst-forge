@@ -115,6 +115,55 @@ pub struct MatrixReport {
     pub scenarios: Vec<ScenarioResult>,
 }
 
+// --- Enhanced observability types (Shinryū integration) ---
+
+/// Detailed per-pod state extracted from kubectl JSON.
+/// Captures the fields that `count_pod_states()` previously ignored.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PodDetail {
+    pub name: String,
+    pub phase: String,
+    pub node: Option<String>,
+    pub creation_timestamp: Option<String>,
+    pub restart_count: u32,
+    pub state_reason: Option<String>,
+    pub container_started_at: Option<String>,
+    pub qos_class: Option<String>,
+    pub host_ip: Option<String>,
+    pub pod_ip: Option<String>,
+    pub injected: bool,
+}
+
+impl PodDetail {
+    /// Extract `PodDetail` from a kubectl pod JSON value.
+    pub fn from_json(pod: &serde_json::Value, injected: bool) -> Self {
+        let status = &pod["status"];
+        let container_status = status["containerStatuses"]
+            .as_array()
+            .and_then(|a| a.first());
+
+        Self {
+            name: pod["metadata"]["name"].as_str().unwrap_or("").to_string(),
+            phase: status["phase"].as_str().unwrap_or("Unknown").to_string(),
+            node: pod["spec"]["nodeName"].as_str().map(String::from),
+            creation_timestamp: pod["metadata"]["creationTimestamp"].as_str().map(String::from),
+            restart_count: container_status
+                .and_then(|c| c["restartCount"].as_u64())
+                .unwrap_or(0) as u32,
+            state_reason: container_status
+                .and_then(|c| c["state"]["waiting"]["reason"].as_str())
+                .map(String::from),
+            container_started_at: container_status
+                .and_then(|c| c["state"]["running"]["startedAt"].as_str())
+                .map(String::from),
+            qos_class: status["qosClass"].as_str().map(String::from),
+            host_ip: status["hostIP"].as_str().map(String::from),
+            pod_ip: status["podIP"].as_str().map(String::from),
+            injected,
+        }
+    }
+}
+
 // --- Shared rate functions ---
 
 /// Calculate the injection success rate as a percentage.

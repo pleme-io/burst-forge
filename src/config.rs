@@ -322,6 +322,12 @@ pub struct Config {
     #[serde(default)]
     pub output_dir: Option<String>,
 
+    /// Vector HTTP endpoint for structured event emission (Shinryū integration).
+    /// When set, burst-forge POSTs JSON events to this URL.
+    /// Example: `http://vector.observability.svc:9500`
+    #[serde(default)]
+    pub vector_endpoint: Option<String>,
+
     /// Reset phase configuration (Phase 1).
     #[serde(default)]
     pub reset: ResetConfig,
