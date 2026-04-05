@@ -1,0 +1,63 @@
+# Cluster binding for scale-test EKS cluster.
+# Separates infrastructure details from customer profiles.
+
+cluster_name: scale-test
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+
+node_groups:
+  burst:
+    cluster_name: scale-test
+    nodegroup_name: scale-test-burst
+    region: us-east-1
+    aws_profile: akeyless-development
+    pods_per_node: 58
+    max_nodes: 20
+  workers:
+    cluster_name: scale-test
+    nodegroup_name: scale-test-workers
+    region: us-east-1
+    aws_profile: akeyless-development
+    desired: 3
+    baseline: 3
+  observability:
+    cluster_name: scale-test
+    nodegroup_name: scale-test-observability
+    region: us-east-1
+    aws_profile: akeyless-development
+    pods_per_node: 20
+    max_nodes: 2
+
+injection:
+  mode: env
+  env_prefix: "AKEYLESS_"
+  namespace: akeyless-system
+  gateway:
+    deployment: akeyless-gateway-akeyless-api-gateway
+    label: "app.kubernetes.io/name=akeyless-api-gateway"
+    release: akeyless-gateway
+  webhook:
+    deployment: akeyless-secrets-injection
+    label: "app=akeyless-secrets-injection"
+    release: akeyless-secrets-injection
+
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+  suspend_kustomizations:
+    - scale-test-workloads
+
+observability:
+  vector_endpoint: "http://vector.observability.svc:9500"
+
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"

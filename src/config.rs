@@ -53,6 +53,12 @@ pub struct Scenario {
     /// Override gateway memory limit per scenario (e.g., "1Gi").
     #[serde(default)]
     pub gateway_memory_limit: Option<String>,
+    /// Override webhook memory request per scenario (e.g., "128Mi").
+    #[serde(default)]
+    pub webhook_memory_request: Option<String>,
+    /// Override webhook memory limit per scenario (e.g., "512Mi").
+    #[serde(default)]
+    pub webhook_memory_limit: Option<String>,
 }
 
 /// EKS node group configuration for burst testing.

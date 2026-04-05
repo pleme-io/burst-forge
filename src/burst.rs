@@ -466,6 +466,22 @@ pub fn apply_infrastructure_patches(
         kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
     }
 
+    // Webhook memory override
+    if scenario.webhook_memory_request.is_some() || scenario.webhook_memory_limit.is_some() {
+        let wh_dep = &config.webhook_deployment;
+        let wh_name = &config.webhook_container_name;
+        let req = scenario.webhook_memory_request.as_deref().unwrap_or("128Mi");
+        let limit = scenario.webhook_memory_limit.as_deref().unwrap_or("256Mi");
+        crate::output::print_action(&format!("Setting WH memory: request={req}, limit={limit}"));
+        let patch = serde_json::to_string(&serde_json::json!({
+            "spec": {"template": {"spec": {"containers": [{
+                "name": wh_name,
+                "resources": {"requests": {"memory": req}, "limits": {"memory": limit}}
+            }]}}}
+        }))?;
+        kubectl.run(&["-n", inj_ns, "patch", "deployment", wh_dep, "--type=strategic", "-p", &patch])?;
+    }
+
     Ok(())
 }
 

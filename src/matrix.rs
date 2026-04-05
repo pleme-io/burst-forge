@@ -245,6 +245,15 @@ pub fn run_matrix(
     let passed = total_count - failure_count;
     emitter.matrix_complete(total_count, passed, failure_count);
 
+    if output::is_json_mode() {
+        output::json_emit(&serde_json::json!({
+            "type": "matrix_complete",
+            "total": total_count,
+            "passed": passed,
+            "failed": failure_count,
+        }));
+    }
+
     if failure_count > 0 {
         // Still print the report JSON so the caller has the data
         output::print_phase("Matrix Report (with failures)");
@@ -292,6 +301,14 @@ fn run_single_scenario(
         }
         Err(e) => {
             emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
+            if output::is_json_mode() {
+                output::json_emit(&serde_json::json!({
+                    "type": "scenario_error",
+                    "scenario": scenario.name,
+                    "phase": "RESET",
+                    "error": e.to_string(),
+                }));
+            }
             return make_error_result(scenario, format!("Phase 1 RESET failed: {e}"));
         }
     };
@@ -304,6 +321,14 @@ fn run_single_scenario(
         }
         Err(e) => {
             emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
+            if output::is_json_mode() {
+                output::json_emit(&serde_json::json!({
+                    "type": "scenario_error",
+                    "scenario": scenario.name,
+                    "phase": "WARMUP",
+                    "error": e.to_string(),
+                }));
+            }
             return make_error_result(scenario, format!("Phase 2 WARMUP failed: {e}"));
         }
     };
@@ -314,10 +339,25 @@ fn run_single_scenario(
             Ok((b, ms)) => {
                 emitter.phase_complete(&scenario.name, "EXECUTION", ms);
                 emitter.burst_complete(&scenario.name, &b);
+                if output::is_json_mode() {
+                    output::json_emit(&serde_json::json!({
+                        "type": "burst_complete",
+                        "scenario": scenario.name,
+                        "result": serde_json::to_value(&b).unwrap_or_default(),
+                    }));
+                }
                 (b, ms)
             }
             Err(e) => {
                 emitter.scenario_complete(&scenario.name, false, Some(&e.to_string()));
+                if output::is_json_mode() {
+                    output::json_emit(&serde_json::json!({
+                        "type": "scenario_error",
+                        "scenario": scenario.name,
+                        "phase": "EXECUTION",
+                        "error": e.to_string(),
+                    }));
+                }
                 return ScenarioResult {
                     name: scenario.name.clone(),
                     replicas: scenario.replicas,
@@ -348,7 +388,7 @@ fn run_single_scenario(
 
     emitter.scenario_complete(&scenario.name, true, None);
 
-    ScenarioResult {
+    let result = ScenarioResult {
         name: scenario.name.clone(),
         replicas: scenario.replicas,
         gateway_replicas: scenario.gateway_replicas,
@@ -357,5 +397,16 @@ fn run_single_scenario(
         burst: Some(burst_result),
         phase_timings: Some(timings),
         error: None,
+    };
+
+    if output::is_json_mode() {
+        output::json_emit(&serde_json::json!({
+            "type": "scenario_complete",
+            "scenario": scenario.name,
+            "success": true,
+            "result": serde_json::to_value(&result).unwrap_or_default(),
+        }));
     }
+
+    result
 }

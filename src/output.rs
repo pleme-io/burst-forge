@@ -2,15 +2,44 @@
 //!
 //! Provides consistent formatting with visual hierarchy, dot-leader alignment,
 //! ANSI color (when stdout is a TTY), timing, and ASCII table rendering.
+//!
+//! ## JSON Output Mode
+//!
+//! When `--output json` is passed, structured JSON lines are emitted to stdout
+//! for agent consumption. Existing terminal output continues unchanged.
 
 #![allow(dead_code)]
 
 use std::fmt::Write;
 use std::io::IsTerminal;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use serde_json;
 
 /// Whether stdout is a TTY (enables ANSI colors).
 static IS_TTY: LazyLock<bool> = LazyLock::new(|| std::io::stdout().is_terminal());
+
+/// Whether JSON output mode is enabled (agent consumption).
+static JSON_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Enable JSON output mode. Call once at startup from CLI parsing.
+pub fn enable_json_mode() {
+    JSON_MODE.store(true, Ordering::Relaxed);
+}
+
+/// Check if JSON mode is active.
+pub fn is_json_mode() -> bool {
+    JSON_MODE.load(Ordering::Relaxed)
+}
+
+/// Emit a structured JSON line to stdout (agent consumption channel).
+/// Only emits when JSON mode is enabled.
+pub fn json_emit(value: &serde_json::Value) {
+    if is_json_mode() {
+        println!("{}", serde_json::to_string(value).unwrap_or_default());
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ANSI color helpers
@@ -113,6 +142,11 @@ pub fn cyan(s: &str) -> String {
 /// Print the burst-forge startup banner with version.
 pub fn print_banner(subtitle: &str) {
     let version = env!("CARGO_PKG_VERSION");
+    json_emit(&serde_json::json!({
+        "type": "banner",
+        "version": version,
+        "text": subtitle,
+    }));
     let inner = format!("  burst-forge v{version} -- {subtitle}  ");
     let width = inner.len();
     let top = format!("\u{2554}{}\u{2557}", "\u{2550}".repeat(width));
@@ -135,6 +169,10 @@ pub fn print_banner(subtitle: &str) {
 /// === Phase: Node Pre-Heat (19 nodes) ===
 /// ```
 pub fn print_phase(label: &str) {
+    json_emit(&serde_json::json!({
+        "type": "phase_start",
+        "phase": label,
+    }));
     println!();
     println!("{}", bold(&format!("=== {label} ===")));
     println!();
@@ -146,6 +184,11 @@ pub fn print_phase(label: &str) {
 /// === Node Pre-Heat (completed in 2m 34s) ===
 /// ```
 pub fn print_phase_complete(label: &str, elapsed_secs: u64) {
+    json_emit(&serde_json::json!({
+        "type": "phase_complete",
+        "phase": label,
+        "elapsed_secs": elapsed_secs,
+    }));
     println!();
     println!(
         "{}",
@@ -160,6 +203,15 @@ pub fn print_phase_complete(label: &str, elapsed_secs: u64) {
 /// --- Scenario 1/6: 751-1000 pods ---
 /// ```
 pub fn print_scenario(index: usize, total: usize, name: &str, replicas: u32, gw: u32, wh: u32) {
+    json_emit(&serde_json::json!({
+        "type": "scenario_start",
+        "index": index + 1,
+        "total": total,
+        "name": name,
+        "replicas": replicas,
+        "gateway_replicas": gw,
+        "webhook_replicas": wh,
+    }));
     println!();
     println!(
         "{}",
@@ -192,6 +244,12 @@ const DOT_LEADER_WIDTH: usize = 48;
 ///     Actual:   GW 4/6 ready (2 pods not ready after 180s)
 /// ```
 pub fn print_gate_result(gate: &str, detail: &str, passed: bool) {
+    json_emit(&serde_json::json!({
+        "type": "gate_result",
+        "gate": gate,
+        "detail": detail,
+        "passed": passed,
+    }));
     let label = format!("  {gate} {detail}");
     let status = if passed {
         bold_green("PASS")
@@ -269,6 +327,14 @@ pub fn print_burst_start(replicas: u32) {
 
 /// Print burst completion.
 pub fn print_burst_complete(running: u32, replicas: u32, elapsed_ms: u64, injection_rate: f64) {
+    json_emit(&serde_json::json!({
+        "type": "burst_status",
+        "running": running,
+        "replicas": replicas,
+        "elapsed_ms": elapsed_ms,
+        "injection_rate": injection_rate,
+        "passed": running >= replicas,
+    }));
     println!();
     #[allow(clippy::cast_precision_loss)]
     let secs = elapsed_ms as f64 / 1000.0;
@@ -282,12 +348,21 @@ pub fn print_burst_complete(running: u32, replicas: u32, elapsed_ms: u64, inject
 
 /// Print a timeout message.
 pub fn print_timeout(timeout_secs: u64) {
+    json_emit(&serde_json::json!({
+        "type": "timeout",
+        "timeout_secs": timeout_secs,
+    }));
     println!();
     println!("  {}", bold_red(&format!("TIMEOUT after {timeout_secs}s")));
 }
 
 /// Print capacity limit reached.
 pub fn print_capacity_limit(running: u32, replicas: u32) {
+    json_emit(&serde_json::json!({
+        "type": "capacity_limit",
+        "running": running,
+        "replicas": replicas,
+    }));
     println!();
     println!(
         "  {}",
@@ -311,6 +386,16 @@ pub fn print_iteration_results(
     all_ready_ms: Option<u64>,
     duration_ms: u64,
 ) {
+    json_emit(&serde_json::json!({
+        "type": "iteration_result",
+        "iteration": iteration,
+        "running": running,
+        "requested": requested,
+        "injection_rate": injection_rate,
+        "first_ready_ms": first_ready_ms,
+        "all_ready_ms": all_ready_ms,
+        "duration_ms": duration_ms,
+    }));
     println!();
     println!("  {}", bold(&format!("Iteration {iteration} Results")));
     println!("  Pods Running:     {running}/{requested}");
@@ -455,6 +540,12 @@ pub fn print_verify_header() {
 
 /// Print a verification check line.
 pub fn print_verify_check(component: &str, detail: &str, ok: bool) {
+    json_emit(&serde_json::json!({
+        "type": "verify_check",
+        "component": component,
+        "detail": detail,
+        "ok": ok,
+    }));
     let icon = if ok { green("OK") } else { red("!!") };
     let plain_label = format!("  {component}");
     let dots_needed = if plain_label.len() < 40 { 40 - plain_label.len() } else { 3 };
@@ -584,6 +675,12 @@ pub fn print_node_scaledown() {
 
 /// Print matrix failure summary.
 pub fn print_matrix_failures(failure_count: usize, total_count: usize, failures: &[String]) {
+    json_emit(&serde_json::json!({
+        "type": "matrix_failures",
+        "failure_count": failure_count,
+        "total_count": total_count,
+        "failures": failures,
+    }));
     println!();
     println!(
         "  {}",
@@ -695,6 +792,20 @@ pub fn print_cooldown(secs: u64) {
 
 /// Print the matrix results as a formatted summary.
 pub fn print_matrix_summary(rows: &[SummaryRow]) {
+    let json_rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| serde_json::json!({
+            "scenario": r.scenario,
+            "pods": r.pods,
+            "time": r.time,
+            "injection": r.injection,
+            "status": r.status,
+        }))
+        .collect();
+    json_emit(&serde_json::json!({
+        "type": "matrix_summary",
+        "rows": json_rows,
+    }));
     print_phase("Results Summary");
     print_summary_table(rows);
 }

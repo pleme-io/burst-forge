@@ -1,0 +1,79 @@
+# Phase 7: GW readiness probe timing
+# GW readiness probe initialDelaySeconds: 30 adds 30s to every GW scaling event.
+# GW actually starts in ~25s. Reducing to 15-20s could save 10-15s per warmup.
+#
+# NOTE: This requires modifying the GW HelmRelease between runs.
+# Run this config twice:
+#   1. With current readiness (30s) — baseline
+#   2. After patching readiness to 15s in the HelmRelease (or via kubectl):
+#      kubectl -n akeyless-system patch deployment akeyless-gateway-akeyless-api-gateway \
+#        --type=json -p='[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds","value":15}]'
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 3
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://vector.observability.svc:9500"
+confluence:
+  base_url: "akeyless.atlassian.net"
+  space_key: "~7120203936f1d3939b4810895c20eb2bc58ae4"
+  parent_page_id: "3972595716"
+  user_email: "luis.d@akeyless.io"
+  token_path: "~/.config/atlassian/akeyless/api-token"
+scenarios:
+  - name: "readiness-baseline"
+    replicas: 1000
+    gateway_replicas: 15
+    webhook_replicas: 5
+    gateway_memory_limit: "1Gi"

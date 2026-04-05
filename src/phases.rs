@@ -259,20 +259,34 @@ pub fn run_phase_2_warmup(
         timings.webhook_ms = sub_start.elapsed().as_millis() as u64;
     }
 
-    // 2d+: Infrastructure resource patches (WH/GW CPU overrides)
+    // 2d+: Infrastructure resource patches (WH/GW CPU/memory overrides)
     if scenario.webhook_cpu_request.is_some()
         || scenario.webhook_cpu_limit.is_some()
+        || scenario.webhook_memory_request.is_some()
+        || scenario.webhook_memory_limit.is_some()
         || scenario.gateway_cpu_request.is_some()
         || scenario.gateway_cpu_limit.is_some()
+        || scenario.gateway_memory_request.is_some()
+        || scenario.gateway_memory_limit.is_some()
     {
         burst::apply_infrastructure_patches(kubectl, config, scenario)?;
         // Wait for rollout after patching resources (triggers pod restart)
-        let wh_path = format!("deployment/{}", config.webhook_deployment);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "rollout", "status",
-            &wh_path, &format!("--timeout={}s", config.rollout_wait_secs),
-        ]);
-        if scenario.gateway_cpu_request.is_some() || scenario.gateway_cpu_limit.is_some() {
+        let wh_patched = scenario.webhook_cpu_request.is_some()
+            || scenario.webhook_cpu_limit.is_some()
+            || scenario.webhook_memory_request.is_some()
+            || scenario.webhook_memory_limit.is_some();
+        let gw_patched = scenario.gateway_cpu_request.is_some()
+            || scenario.gateway_cpu_limit.is_some()
+            || scenario.gateway_memory_request.is_some()
+            || scenario.gateway_memory_limit.is_some();
+        if wh_patched {
+            let wh_path = format!("deployment/{}", config.webhook_deployment);
+            let _ = kubectl.run(&[
+                "-n", &config.injection_namespace, "rollout", "status",
+                &wh_path, &format!("--timeout={}s", config.rollout_wait_secs),
+            ]);
+        }
+        if gw_patched {
             let gw_path = format!("deployment/{}", config.gateway_deployment);
             let _ = kubectl.run(&[
                 "-n", &config.injection_namespace, "rollout", "status",

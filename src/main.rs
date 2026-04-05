@@ -16,6 +16,7 @@ mod matrix;
 mod nodes;
 mod output;
 mod phases;
+mod profile;
 mod report;
 mod types;
 mod verify;
@@ -40,6 +41,10 @@ struct Cli {
     /// Path to burst-forge YAML config
     #[arg(long, global = true)]
     config: Option<String>,
+
+    /// Output format: text (default) or json (agent consumption)
+    #[arg(long, global = true, default_value = "text")]
+    output: String,
 }
 
 #[derive(Subcommand)]
@@ -109,6 +114,12 @@ enum Commands {
         #[arg(long)]
         skip_scaling: bool,
     },
+
+    /// Validate or inspect a customer profile
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -127,11 +138,78 @@ enum NodesAction {
     Status,
 }
 
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// Validate a customer profile YAML
+    Validate {
+        /// Path to profile YAML
+        #[arg(long)]
+        profile: String,
+    },
+    /// Show theoretical limits for a profile
+    Show {
+        /// Path to profile YAML
+        #[arg(long)]
+        profile: String,
+    },
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
+
+    if cli.output == "json" {
+        output::enable_json_mode();
+    }
+
+    // Handle Profile command early — it only reads profile YAML, no burst config needed.
+    if let Commands::Profile { action } = &cli.command {
+        match action {
+            ProfileAction::Validate { profile } => {
+                let p = profile::CustomerProfile::load(profile)?;
+                println!(
+                    "Profile '{}' is valid (target={}, test_max={}, qps={})",
+                    p.customer.name,
+                    p.workload.target_pods,
+                    p.workload.test_max_pods,
+                    p.akeyless.qps,
+                );
+                return Ok(());
+            }
+            ProfileAction::Show { profile } => {
+                let p = profile::CustomerProfile::load(profile)?;
+                println!("Customer:       {}", p.customer.name);
+                if let Some(ticket) = &p.customer.ticket {
+                    println!("Ticket:         {ticket}");
+                }
+                println!("Environment:    {} nodes", p.environment.nodes);
+                if let Some(nt) = &p.environment.node_type {
+                    println!("Node type:      {nt}");
+                }
+                println!("Target pods:    {}", p.workload.target_pods);
+                println!("Test max pods:  {}", p.workload.test_max_pods);
+                println!("Secrets/pod:    {}", p.workload.secrets_per_pod);
+                println!("QPS/gateway:    {}", p.akeyless.qps);
+                println!("Burst QPS:      {}", p.akeyless.burst_qps);
+                println!();
+                println!("Theoretical minimum injection time:");
+                for gw in [1, 2, 3, 5, 8, 10] {
+                    let secs = p.theoretical_minimum_secs(gw);
+                    println!("  {gw} GW replica(s): {secs:.1}s ({:.1}m)", secs / 60.0);
+                }
+                if !p.constraints.is_empty() {
+                    println!();
+                    println!("Constraints:");
+                    for c in &p.constraints {
+                        println!("  - {c}");
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
 
     // Resolve config path: --config flag, or flow name → configs/{name}.yaml
     let config_path = match &cli.command {
@@ -501,6 +579,9 @@ fn main() -> anyhow::Result<()> {
                 publish_report(conf, &matrix_report, &cfg)?;
             }
         }
+
+        // Handled before config::discover() — early return above.
+        Commands::Profile { .. } => unreachable!(),
     }
 
     Ok(())

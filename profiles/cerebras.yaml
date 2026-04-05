@@ -1,0 +1,31 @@
+customer:
+  name: cerebras
+  ticket: ASM-17583
+
+environment:
+  nodes: 151
+  node_type: "AMD EPYC 9354P 32-core"
+  node_memory_gb: 192
+
+workload:
+  target_pods: 300
+  test_max_pods: 1000
+  secrets_per_pod: 2
+  init_containers: 2
+  workload_kind: job
+  restart_policy: Never
+  pod_memory_gb: 30
+
+akeyless:
+  auth_method: k8s_single
+  gateway_nodes: shared
+  gateway_headroom_pct: 50
+  gateway_memory: "512Mi"
+  webhook_timeout_secs: 30
+  qps: 5
+  burst_qps: 10
+
+constraints:
+  - "Single K8s auth for entire cluster — cannot implement per-namespace"
+  - "QPS=5 and burst=10 hardcoded in gateway — no env var"
+  - "3 shared nodes for GW+WH (50% headroom)"
