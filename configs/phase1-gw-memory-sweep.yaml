@@ -6,6 +6,8 @@
 kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
 timeout_secs: 600
 poll_interval_secs: 5
 cooldown_secs: 30

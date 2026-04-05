@@ -2,6 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Predicted performance values from scaling formulas.
+///
+/// Calculated before each burst using validated formulas from 40+ experiments.
+/// Emitted alongside actuals in BURST_COMPLETE events for Shinryu comparison.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Prediction {
+    /// Predicted optimal GW replicas (sub-90s formula).
+    pub predicted_gw_replicas: u32,
+    /// Predicted optimal WH replicas.
+    pub predicted_wh_replicas: u32,
+    /// Theoretical minimum injection time in seconds.
+    pub predicted_min_secs: f64,
+    /// Predicted throughput (pods/sec) at theoretical minimum.
+    pub predicted_throughput_pods_per_sec: f64,
+    /// Which formula was used ("sub_90s" or "sub_3min").
+    pub formula: String,
+    /// Actual GW replicas used in this scenario.
+    pub actual_gw_replicas: u32,
+    /// Actual WH replicas used in this scenario.
+    pub actual_wh_replicas: u32,
+}
+
 /// Result of a single burst test iteration.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BurstResult {
@@ -31,6 +53,9 @@ pub struct BurstResult {
     /// Peak concurrent Running pods (useful for Jobs that complete and get cleaned up).
     #[serde(default)]
     pub peak_running: u32,
+    /// Scaling formula predictions (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prediction: Option<Prediction>,
 }
 
 /// Result of infrastructure verification.
@@ -189,6 +214,54 @@ pub fn throughput_per_sec(count: u32, elapsed_ms: u64) -> f64 {
     }
 }
 
+impl Prediction {
+    /// Calculate predictions for a scenario using validated scaling formulas.
+    #[must_use]
+    pub fn calculate(
+        replicas: u32,
+        secrets_per_pod: u32,
+        qps: u32,
+        actual_gw: u32,
+        actual_wh: u32,
+    ) -> Self {
+        use crate::plan;
+
+        let predicted_gw = plan::gw_for_sub_90s(replicas, secrets_per_pod, qps);
+        let predicted_wh = plan::wh_optimal(replicas);
+        let predicted_min = plan::theoretical_min_secs(replicas, secrets_per_pod, actual_gw, qps);
+        let predicted_throughput = if predicted_min > 0.0 {
+            f64::from(replicas) / predicted_min
+        } else {
+            0.0
+        };
+
+        Self {
+            predicted_gw_replicas: predicted_gw,
+            predicted_wh_replicas: predicted_wh,
+            predicted_min_secs: predicted_min,
+            predicted_throughput_pods_per_sec: predicted_throughput,
+            formula: "sub_90s".to_string(),
+            actual_gw_replicas: actual_gw,
+            actual_wh_replicas: actual_wh,
+        }
+    }
+
+    /// Compute the verdict by comparing prediction against actual result.
+    #[must_use]
+    pub fn verdict(&self, actual_duration_secs: f64) -> &'static str {
+        if self.predicted_min_secs <= 0.0 || actual_duration_secs <= 0.0 {
+            return "UNKNOWN";
+        }
+        let ratio = actual_duration_secs / self.predicted_min_secs;
+        match ratio {
+            r if r < 0.90 => "FASTER",
+            r if r <= 1.10 => "ON_TARGET",
+            r if r <= 1.50 => "SLOWER",
+            _ => "UNDER_PROVISIONED",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +308,51 @@ mod tests {
     #[test]
     fn throughput_zero_count() {
         assert!((throughput_per_sec(0, 1000)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn prediction_cerebras_300() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        assert_eq!(p.predicted_wh_replicas, 3);
+        assert!(p.predicted_gw_replicas > 0);
+        assert!(p.predicted_min_secs > 0.0);
+        assert_eq!(p.actual_gw_replicas, 5);
+        assert_eq!(p.actual_wh_replicas, 3);
+    }
+
+    #[test]
+    fn prediction_cerebras_1000() {
+        let p = Prediction::calculate(1000, 2, 5, 15, 5);
+        assert_eq!(p.predicted_gw_replicas, 6); // ceil(1000*2/(5*67))
+        assert_eq!(p.predicted_wh_replicas, 5);
+    }
+
+    #[test]
+    fn verdict_on_target() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        // If actual matches predicted within 10%
+        let v = p.verdict(p.predicted_min_secs * 1.05);
+        assert_eq!(v, "ON_TARGET");
+    }
+
+    #[test]
+    fn verdict_faster() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 0.5);
+        assert_eq!(v, "FASTER");
+    }
+
+    #[test]
+    fn verdict_slower() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 1.3);
+        assert_eq!(v, "SLOWER");
+    }
+
+    #[test]
+    fn verdict_under_provisioned() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 2.0);
+        assert_eq!(v, "UNDER_PROVISIONED");
     }
 }

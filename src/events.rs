@@ -151,9 +151,33 @@ impl EventEmitter {
     }
 
     pub fn burst_complete(&self, scenario: &str, result: &crate::types::BurstResult) {
+        let mut payload = serde_json::to_value(result).unwrap_or_default();
+
+        // Flatten prediction into top-level event fields for Shinryu querying
+        if let Some(ref pred) = result.prediction {
+            if let serde_json::Value::Object(ref mut map) = payload {
+                map.insert("predicted_gw_replicas".to_string(), pred.predicted_gw_replicas.into());
+                map.insert("predicted_wh_replicas".to_string(), pred.predicted_wh_replicas.into());
+                map.insert("predicted_min_secs".to_string(), serde_json::json!(pred.predicted_min_secs));
+                map.insert("predicted_throughput".to_string(), serde_json::json!(pred.predicted_throughput_pods_per_sec));
+                map.insert("prediction_formula".to_string(), pred.formula.clone().into());
+
+                // Calculate verdict from actual duration
+                let actual_secs = result.duration_ms as f64 / 1000.0;
+                map.insert("prediction_verdict".to_string(), pred.verdict(actual_secs).into());
+                map.insert("prediction_error_pct".to_string(), serde_json::json!(
+                    if pred.predicted_min_secs > 0.0 {
+                        ((actual_secs - pred.predicted_min_secs) / pred.predicted_min_secs) * 100.0
+                    } else {
+                        0.0
+                    }
+                ));
+            }
+        }
+
         self.emit(&BurstForgeEvent::new(
             "BURST_COMPLETE", &self.experiment_id, scenario,
-            serde_json::to_value(result).unwrap_or_default(),
+            payload,
         ));
     }
 

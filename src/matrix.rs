@@ -8,7 +8,7 @@ use crate::kubectl::KubeCtl;
 use crate::nodes;
 use crate::output;
 use crate::phases;
-use crate::types::{MatrixReport, PhaseTimings, ScenarioResult};
+use crate::types::{MatrixReport, PhaseTimings, Prediction, ScenarioResult};
 
 /// Run the scaling matrix: iterate scenarios, patch replicas, verify, burst.
 ///
@@ -336,7 +336,16 @@ fn run_single_scenario(
     // Phase 3: EXECUTION -- burst bandwidth
     let (burst_result, execution_ms) =
         match phases::run_phase_3_execution(kubectl, config, scenario, emitter) {
-            Ok((b, ms)) => {
+            Ok((mut b, ms)) => {
+                // Attach scaling formula predictions to the result
+                b.prediction = Some(Prediction::calculate(
+                    scenario.replicas,
+                    config.secrets_per_pod,
+                    config.qps,
+                    scenario.gateway_replicas,
+                    scenario.webhook_replicas,
+                ));
+
                 emitter.phase_complete(&scenario.name, "EXECUTION", ms);
                 emitter.burst_complete(&scenario.name, &b);
                 if output::is_json_mode() {

@@ -319,6 +319,16 @@ pub struct Config {
     #[serde(default = "default_secret_path_prefix")]
     pub secret_path_prefix: String,
 
+    /// Gateway QPS limit (per replica). Used by scaling formulas for predictions.
+    /// Default: 5 (Akeyless default).
+    #[serde(default = "default_qps")]
+    pub qps: u32,
+
+    /// Secrets per pod for injection counting and prediction calculation.
+    /// Default: 2.
+    #[serde(default = "default_secrets_per_pod")]
+    pub secrets_per_pod: u32,
+
     /// Confluence reporting — auto-publish results after matrix run.
     #[serde(default)]
     pub confluence: Option<ConfluenceConfig>,
@@ -506,6 +516,8 @@ fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 fn default_image_cache_namespace() -> String { "image-cache".to_string() }
 fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_string() }
 fn default_flux_namespace() -> String { "flux-system".to_string() }
+fn default_qps() -> u32 { 5 }
+fn default_secrets_per_pod() -> u32 { 2 }
 fn default_warmup_timeout() -> u64 { 300 }
 fn default_grace_period() -> u64 { 30 }
 

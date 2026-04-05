@@ -166,6 +166,7 @@ pub fn run_burst(
                 iteration,
                 total_secrets_injected: total_secrets,
                 peak_running,
+                prediction: None,
             });
         }
 
@@ -219,6 +220,7 @@ pub fn run_burst(
         iteration,
         total_secrets_injected: total_secrets,
         peak_running,
+        prediction: None,
     })
 }
 
