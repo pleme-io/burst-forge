@@ -16,6 +16,7 @@ mod matrix;
 mod nodes;
 mod output;
 mod phases;
+mod plan;
 mod profile;
 mod report;
 mod types;
@@ -120,6 +121,16 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
+
+    /// Generate experiment plan from customer profile
+    Plan {
+        /// Path to customer profile YAML
+        #[arg(long)]
+        profile: String,
+        /// Path to cluster binding YAML
+        #[arg(long)]
+        cluster: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -162,6 +173,29 @@ fn main() -> anyhow::Result<()> {
 
     if cli.output == "json" {
         output::enable_json_mode();
+    }
+
+    // Handle Plan command early — it only reads profile YAML + generates plan, no burst config needed.
+    if let Commands::Plan { profile, cluster } = &cli.command {
+        let prof = profile::CustomerProfile::load(profile)?;
+        let p = plan::generate_plan(&prof, cluster)?;
+        plan::write_plan_configs(&p, cluster)?;
+        let total_scenarios: usize = p.phases.iter().map(|ph| ph.scenarios.len()).sum();
+        output::print_action(&format!(
+            "Generated {} phases with {} total scenarios for '{}'",
+            p.phases.len(),
+            total_scenarios,
+            p.customer,
+        ));
+        output::print_action(&format!(
+            "Recommended: {} GW, {} WH, {} memory (theoretical min: {:.1}s)",
+            p.recommended_gw,
+            p.recommended_wh,
+            p.recommended_memory,
+            p.theoretical_min_secs,
+        ));
+        output::print_action("Plan manifest written to plan-manifest.yaml");
+        return Ok(());
     }
 
     // Handle Profile command early — it only reads profile YAML, no burst config needed.
@@ -582,6 +616,7 @@ fn main() -> anyhow::Result<()> {
 
         // Handled before config::discover() — early return above.
         Commands::Profile { .. } => unreachable!(),
+        Commands::Plan { .. } => unreachable!(),
     }
 
     Ok(())
