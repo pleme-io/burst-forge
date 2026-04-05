@@ -91,6 +91,10 @@ via shinryu-mcp DataFusion SQL.
 | Command | What it does |
 |---------|-------------|
 | `flow <name>` | Run named flow from `configs/{name}.yaml` |
+| `flow <name> --output json` | Same, with structured JSON output for agent consumption |
+| `profile validate --profile X` | Validate a customer profile YAML |
+| `profile show --profile X` | Show theoretical limits for a customer |
+| `plan --profile X --cluster Y` | Generate 8-phase experiment plan from profile |
 | `matrix` | Run matrix with explicit `--config` path |
 | `burst` | Single burst (reset → warmup → execution) |
 | `verify` | Check infrastructure readiness |
@@ -99,6 +103,44 @@ via shinryu-mcp DataFusion SQL.
 | `reset-all` | Full teardown (deployment + pods + GW/WH + kustomizations + nodes) |
 | `nodes` | EKS node group lifecycle |
 | `report` | Publish JSON results to Confluence |
+
+## Agent-Driven Experimentation
+
+burst-forge supports autonomous agent-driven optimization via:
+
+### Customer Profiles (`profiles/`)
+Typed YAML describing a customer's environment (nodes, secrets, QPS constraints).
+Separates WHAT the customer needs from HOW to test it.
+
+### Cluster Bindings (`clusters/`)
+Infrastructure-specific config (kubeconfig, node groups, Confluence).
+Same customer profile can target different clusters.
+
+### JSON Output Mode (`--output json`)
+Structured NDJSON to stdout for machine consumption. Each lifecycle event
+(phase, gate, burst, scenario) emits one JSON line. Terminal output unchanged.
+
+### Shinryu SQL Templates (`queries/`)
+Pre-built DataFusion SQL for post-experiment analysis:
+- `gap-decomposition.sql` — WHERE does time go?
+- `memory-pressure.sql` — GW heap at limit?
+- `stall-detection.sql` — injection stall windows
+- `cross-signal.sql` — asof_nearest memory↔stall correlation
+- `dns-latency.sql` — Hubble DNS during burst
+- `connection-reuse.sql` — TCP connection patterns
+
+### 8-Phase Experiment Configs (`configs/phase{1-8}*.yaml`)
+Full experiment suite for Cerebras optimization.
+
+### Scaling Formulas (validated from 40+ experiments)
+| Formula | Expression |
+|---------|-----------|
+| GW for sub-90s | `ceil(pods * secrets / (qps * 67))` |
+| GW for sub-3min | `ceil(pods * secrets / (qps * 91))` |
+| WH optimal (≤300) | 3 |
+| WH optimal (≥500) | 5 |
+| GW memory min | 768Mi (WH≤5), 1Gi (WH>5) |
+| Theoretical floor | `(pods * secrets) / (gw * qps)` seconds |
 
 ## Key Config Fields
 
