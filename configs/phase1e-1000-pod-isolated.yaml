@@ -1,0 +1,96 @@
+# Phase 1e: 1000-pod re-run on isolated node groups + spot bursts
+#
+# Validates the new IaC infrastructure end-to-end:
+# - GW pods on dedicated scale-test-gateway node group (taint role=gateway)
+# - WH pods on dedicated scale-test-webhook node group (taint role=webhook)
+# - Burst pods on scale-test-burst-spot (70% cost savings, max=200)
+# - No more CFS contention with workers
+# - Phase 1d gw20 failure should NOT happen here (worker capacity is no
+#   longer the constraint — gateway node group can fit 8+ GW pods)
+#
+# Hypothesis: Without worker contention, gw16-wh12-1000 should achieve
+# FULL_ADMISSION (Phase 1d hit 994/1000 capped at node ceiling).
+# Also testing the previously-failed gw20 case to see if dedicated nodes
+# unblock it.
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
+timeout_secs: 300
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+# NEW: use the spot burst node group (70% cost savings, max=200)
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst-spot
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 200
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 4
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://localhost:9500"
+scenarios:
+  # gw8-wh12: lower bound — confirm WH bottleneck doesn't pull throughput down
+  - name: "gw8-wh12-1000-isolated"
+    replicas: 1000
+    gateway_replicas: 8
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # gw16-wh12: should hit full admission now that worker pressure is gone
+  - name: "gw16-wh12-1000-isolated"
+    replicas: 1000
+    gateway_replicas: 16
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # gw12-wh12: matches Phase 1d's successful 67.3s run, now on isolated nodes.
+  # Should be the same or faster with no CFS contention.
+  - name: "gw12-wh12-1000-isolated"
+    replicas: 1000
+    gateway_replicas: 12
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
