@@ -1,0 +1,110 @@
+# Phase 1b: QPS Saturation Hunt — find where QPS becomes the bottleneck
+# At 1536Mi memory (no GC pressure), reduce GW replicas until throughput drops
+# proportionally. When halving GW halves throughput, QPS is the ceiling.
+#
+# Baseline: 8 GW at 1536Mi = 15 pods/s, 500 pods in 33.3s
+# Hypothesis: At 2 GW, throughput drops to ~3.75 pods/s (QPS-limited)
+#             At 4 GW, throughput drops to ~7.5 pods/s (QPS-limited)
+#             At 8 GW, 15 pods/s (current baseline, not QPS-limited)
+#             At 1 GW, throughput = ~1.875 pods/s (pure QPS floor)
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
+timeout_secs: 300
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 5
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://localhost:9500"
+scenarios:
+  # 1 GW — pure QPS floor (5 QPS total)
+  - name: "gw1-1536mi"
+    replicas: 500
+    gateway_replicas: 1
+    webhook_replicas: 3
+    gateway_memory_limit: "1536Mi"
+
+  # 2 GW — should be ~2x throughput of 1 GW if QPS-limited
+  - name: "gw2-1536mi"
+    replicas: 500
+    gateway_replicas: 2
+    webhook_replicas: 3
+    gateway_memory_limit: "1536Mi"
+
+  # 4 GW — should be ~4x throughput of 1 GW if QPS-limited
+  - name: "gw4-1536mi"
+    replicas: 500
+    gateway_replicas: 4
+    webhook_replicas: 3
+    gateway_memory_limit: "1536Mi"
+
+  # 8 GW — baseline (15 pods/s from v2, should match)
+  - name: "gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 5
+    gateway_memory_limit: "1536Mi"
+
+  # 12 GW — if throughput still increases, QPS is still the bottleneck
+  - name: "gw12-1536mi"
+    replicas: 500
+    gateway_replicas: 12
+    webhook_replicas: 5
+    gateway_memory_limit: "1536Mi"
+
+  # 15 GW — max from v1. If same as 12, we've found the non-QPS ceiling
+  - name: "gw15-1536mi"
+    replicas: 500
+    gateway_replicas: 15
+    webhook_replicas: 5
+    gateway_memory_limit: "1536Mi"
