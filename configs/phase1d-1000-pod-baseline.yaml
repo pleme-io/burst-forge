@@ -1,0 +1,100 @@
+# Phase 1d: 1000-Pod Baseline — does GW saturation shift with pod count?
+#
+# Phase 1b found GW=8 saturates at 500 pods (more GW = no benefit).
+# Phase 1c found WH=12 doubles throughput at 500 pods at 1536Mi.
+# Phase 1d tests whether saturation thresholds scale linearly to 1000 pods.
+#
+# Hypothesis: GW=8 will be insufficient at 1000 pods. The 26.8 pods/s
+# K8s admission ceiling found at 500 pods means 1000 pods needs ~37s minimum
+# (assuming the ceiling scales with cluster size, not pod count).
+#
+# If GW=8 → ~75s and GW=16 → ~37s, GW scales linearly with pod count.
+# If GW=8 → ~37s and GW=16 → ~37s, the K8s ceiling is the bottleneck.
+# If GW=8 → ~37s and GW=20 → faster, even more GW helps.
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
+timeout_secs: 300
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 5
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://localhost:9500"
+scenarios:
+  # GW=8 — confirmed saturation at 500 pods. Does it hold at 1000?
+  - name: "gw8-wh12-1000"
+    replicas: 1000
+    gateway_replicas: 8
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # GW=12 — middle ground
+  - name: "gw12-wh12-1000"
+    replicas: 1000
+    gateway_replicas: 12
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # GW=16 — formula-recommended for 1000 pods (2x of Phase 1c optimum)
+  - name: "gw16-wh12-1000"
+    replicas: 1000
+    gateway_replicas: 16
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # GW=20 — extreme test, do we still see gains?
+  - name: "gw20-wh12-1000"
+    replicas: 1000
+    gateway_replicas: 20
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
