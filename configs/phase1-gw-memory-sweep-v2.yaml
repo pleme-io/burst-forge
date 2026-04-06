@@ -1,14 +1,14 @@
-# Phase 1: GW Memory Sweep — find the memory knee properly
-# Previous sweep results are invalid (bug: memory-only patches were skipped).
-# Test WH=5 (large-scale optimal) and WH=12 (high contention) across memory limits.
-# Hypothesis: 1Gi is the knee; 1536Mi/2Gi show diminishing returns.
+# Phase 1 v2: GW Memory Sweep — fixed node capacity
+# v1 findings: all scenarios hit 930/1000 ceiling (node slot exhaustion, not GW memory).
+# Fix: WH=5 at 500 pods (fits on 10 nodes), WH=12 at 500 pods (avoids slot contention).
+# This isolates memory as the variable by keeping node capacity abundant.
 
 kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 qps: 5
 secrets_per_pod: 2
-timeout_secs: 600
+timeout_secs: 300
 poll_interval_secs: 5
 cooldown_secs: 30
 rollout_wait_secs: 180
@@ -68,58 +68,58 @@ confluence:
   user_email: "luis.d@akeyless.io"
   token_path: "~/.config/atlassian/akeyless/api-token"
 scenarios:
-  # WH=5 (large-scale optimal), sweep GW memory
-  - name: "wh5-512mi"
-    replicas: 1000
-    gateway_replicas: 15
+  # WH=5, sweep GW memory at 500 pods (10 nodes — no slot contention)
+  - name: "wh5-512mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 5
     gateway_memory_limit: "512Mi"
 
-  - name: "wh5-768mi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh5-768mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 5
     gateway_memory_limit: "768Mi"
 
-  - name: "wh5-1gi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh5-1gi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 5
     gateway_memory_limit: "1Gi"
 
-  - name: "wh5-1536mi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh5-1536mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 5
     gateway_memory_limit: "1536Mi"
 
-  - name: "wh5-2gi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh5-2gi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 5
     gateway_memory_limit: "2Gi"
 
-  # WH=12 (high contention), sweep GW memory
-  - name: "wh12-512mi"
-    replicas: 1000
-    gateway_replicas: 15
+  # WH=12, sweep GW memory at 500 pods (isolate WH contention from node pressure)
+  - name: "wh12-512mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 12
     gateway_memory_limit: "512Mi"
 
-  - name: "wh12-768mi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh12-768mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 12
     gateway_memory_limit: "768Mi"
 
-  - name: "wh12-1gi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh12-1gi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 12
     gateway_memory_limit: "1Gi"
 
-  - name: "wh12-1536mi"
-    replicas: 1000
-    gateway_replicas: 15
+  - name: "wh12-1536mi-500"
+    replicas: 500
+    gateway_replicas: 8
     webhook_replicas: 12
     gateway_memory_limit: "1536Mi"
