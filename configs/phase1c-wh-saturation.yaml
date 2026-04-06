@@ -1,0 +1,112 @@
+# Phase 1c: Webhook Saturation Hunt — find where WH stops helping
+# Baseline locked: 8 GW at 1536Mi delivers 15.6 pods/s, 500 pods in 32s
+# Hypothesis: WH=5 may be the saturation point (matches v2 wh5-1536mi-500 result)
+# Test: hold GW=8, sweep WH from 1 → 16, find where throughput plateaus
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
+timeout_secs: 300
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 180
+node_poll_interval_secs: 15
+drain_timeout_secs: 120
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 20
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 5
+  baseline: 3
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://localhost:9500"
+scenarios:
+  # WH=1 — admission floor
+  - name: "wh1-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 1
+    gateway_memory_limit: "1536Mi"
+
+  # WH=2 — minimal HA
+  - name: "wh2-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 2
+    gateway_memory_limit: "1536Mi"
+
+  # WH=3 — current Cerebras default
+  - name: "wh3-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 3
+    gateway_memory_limit: "1536Mi"
+
+  # WH=5 — known to achieve full admission at 1536Mi (v2 result)
+  - name: "wh5-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 5
+    gateway_memory_limit: "1536Mi"
+
+  # WH=8 — past the historical contention cliff
+  - name: "wh8-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 8
+    gateway_memory_limit: "1536Mi"
+
+  # WH=12 — known v2 result (101% inj at 1536Mi)
+  - name: "wh12-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # WH=16 — high contention test
+  - name: "wh16-gw8-1536mi"
+    replicas: 500
+    gateway_replicas: 8
+    webhook_replicas: 16
+    gateway_memory_limit: "1536Mi"
