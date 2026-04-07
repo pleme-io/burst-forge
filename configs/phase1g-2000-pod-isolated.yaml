@@ -1,0 +1,106 @@
+# Phase 1g: 2000-pod scaling — continuing the roadmap toward 10000.
+#
+# Scaling formula: gw = ceil(pods * secrets / (qps * 67))
+#   gw(2000, 2, 5) = ceil(4000 / 335) = 12
+#
+# Phase 1f showed gw12 is the sweet spot at 1500 pods (1500/1500 in 2m1s).
+# At 2000 pods, the formula predicts gw=12 as the minimum. We test gw=12
+# (formula floor) and gw=16 (headroom). Skipping gw=9 — Phase 1f proved
+# it's insufficient above 1300 pods.
+#
+# WH stays at 12 (saturation since Phase 1c, won't need bumping until ~3000).
+#
+# Cost: spot burst at ~$0.058/hr per node. 2000 pods / 58 per node = 35 nodes.
+# 35 × $0.058 = $2.03/hr burst cost during the run. Each scenario runs ~5-7
+# min, so total burst cost for 2 scenarios ≈ $0.40.
+
+kubeconfig: "~/.kube/scale-test.yaml"
+namespace: scale-test
+deployment: nginx-burst
+qps: 5
+secrets_per_pod: 2
+timeout_secs: 600
+poll_interval_secs: 5
+cooldown_secs: 30
+rollout_wait_secs: 300
+node_poll_interval_secs: 15
+drain_timeout_secs: 180
+drain_poll_interval_secs: 5
+ipamd_warmup_secs: 60
+suspend_kustomizations:
+  - scale-test-workloads
+injection_mode: env
+injection_env_prefix: "AKEYLESS_"
+injection_namespace: akeyless-system
+gateway_deployment: akeyless-gateway-akeyless-api-gateway
+webhook_deployment: akeyless-secrets-injection
+gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+webhook_label: "app=akeyless-secrets-injection"
+gateway_release: akeyless-gateway
+webhook_release: akeyless-secrets-injection
+flux:
+  namespace: flux-system
+  kustomizations:
+    - infrastructure-image-cache
+    - infrastructure-akeyless
+    - infrastructure-akeyless-injection
+    - scale-test-workloads
+node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-burst-spot
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 58
+  max_nodes: 200
+worker_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-workers
+  region: us-east-1
+  aws_profile: akeyless-development
+  desired: 4
+  baseline: 1
+gateway_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-gateway
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 4
+  baseline: 1
+  max_nodes: 16
+  headroom_nodes: 0
+webhook_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-webhook
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 6
+  baseline: 1
+  max_nodes: 6
+  headroom_nodes: 0
+observability_node_group:
+  cluster_name: scale-test
+  nodegroup_name: scale-test-observability
+  region: us-east-1
+  aws_profile: akeyless-development
+  pods_per_node: 20
+  max_nodes: 2
+verify_teardown: true
+warmup_daemonset:
+  namespace: scale-test
+  name: image-warmup
+  timeout_secs: 300
+vector_endpoint: "http://localhost:9500"
+scenarios:
+  # gw12-wh12: formula floor for 2000 pods. Phase 1f sweet spot at 1500.
+  - name: "gw12-wh12-2000-isolated"
+    replicas: 2000
+    gateway_replicas: 12
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
+
+  # gw16-wh12: headroom. Phase 1f hit 87.9s all-ready at 1500.
+  - name: "gw16-wh12-2000-isolated"
+    replicas: 2000
+    gateway_replicas: 16
+    webhook_replicas: 12
+    gateway_memory_limit: "1536Mi"
