@@ -278,23 +278,61 @@ pub fn run_phase_2_warmup(
             )?;
         }
 
-        // Scale gateway
-        output::print_action(&format!(
-            "  Gateway -> {} replicas...", scenario.gateway_replicas
-        ));
-        kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.gateway_deployment,
-            &format!("--replicas={}", scenario.gateway_replicas),
-        ])?;
+        // Scale gateway — wave-based if gateway_batch_size > 0.
+        //
+        // The Akeyless SaaS API throttles at ~5 concurrent auth requests per
+        // access-id (ASM-17539). Without batching, scaling 1→30 creates 30
+        // concurrent cold-starts, only ~5 succeed, the rest CrashLoopBackOff.
+        // With batching, each wave of `batch_size` pods starts, authenticates,
+        // populates the ClusterCache (Redis), and becomes Ready before the
+        // next wave begins. Waves 2+ benefit from the cache and start faster.
+        let target = scenario.gateway_replicas;
+        let batch = config.gateway_batch_size;
 
-        // Wait for gateway rollout
-        let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "rollout", "status",
-            &gw_deploy_path,
-            &format!("--timeout={}s", config.rollout_wait_secs),
-        ]);
+        if batch > 0 && target > batch {
+            let mut current = 0u32;
+            let mut wave = 0u32;
+            while current < target {
+                let next = (current + batch).min(target);
+                wave += 1;
+                output::print_action(&format!(
+                    "  Gateway wave {wave}: {current} -> {next} / {target} replicas..."
+                ));
+                kubectl.run(&[
+                    "-n", &config.injection_namespace, "scale", "deployment",
+                    &config.gateway_deployment,
+                    &format!("--replicas={next}"),
+                ])?;
+
+                let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
+                if let Err(e) = kubectl.run(&[
+                    "-n", &config.injection_namespace, "rollout", "status",
+                    &gw_deploy_path,
+                    &format!("--timeout={}s", config.rollout_wait_secs),
+                ]) {
+                    output::print_warning(&format!(
+                        "Gateway wave {wave} rollout wait: {e}"
+                    ));
+                }
+                current = next;
+            }
+        } else {
+            output::print_action(&format!(
+                "  Gateway -> {target} replicas..."
+            ));
+            kubectl.run(&[
+                "-n", &config.injection_namespace, "scale", "deployment",
+                &config.gateway_deployment,
+                &format!("--replicas={target}"),
+            ])?;
+
+            let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
+            let _ = kubectl.run(&[
+                "-n", &config.injection_namespace, "rollout", "status",
+                &gw_deploy_path,
+                &format!("--timeout={}s", config.rollout_wait_secs),
+            ]);
+        }
     }
     #[allow(clippy::cast_possible_truncation)]
     {

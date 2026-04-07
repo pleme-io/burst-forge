@@ -392,6 +392,16 @@ pub struct Config {
     #[serde(default = "default_qps")]
     pub qps: u32,
 
+    /// Maximum number of gateway replicas to add per scaling wave.
+    /// When > 0, Phase 2c scales the gateway in waves of this size,
+    /// waiting for each wave to become Ready before adding the next.
+    /// This avoids rate-limit saturation against the Akeyless SaaS API
+    /// during cold-start — each pod does a full-sync, and the SaaS
+    /// throttles at ~5 concurrent auth requests per access-id (ASM-17539).
+    /// Default: 0 (no batching — scale all at once, legacy behavior).
+    #[serde(default)]
+    pub gateway_batch_size: u32,
+
     /// Secrets per pod for injection counting and prediction calculation.
     /// Default: 2.
     #[serde(default = "default_secrets_per_pod")]
