@@ -214,6 +214,34 @@ pub fn run_matrix(
         }
     }
 
+    // Restore dedicated GW / WH node groups to their baseline — always attempt.
+    // This drops the cost back to a single warm node per pool between matrix
+    // runs while leaving the pool ready for the next dispatch.
+    if let Some(gng) = &config.gateway_node_group {
+        output::print_phase("Restoring Gateway Nodes to Baseline");
+        if let Err(e) = nodes::scale_infra_node_group(
+            kubectl,
+            gng,
+            gng.baseline,
+            "gateway",
+            std::time::Duration::from_secs(300),
+        ) {
+            output::print_warning(&format!("Failed to restore gateway nodes: {e}"));
+        }
+    }
+    if let Some(wng) = &config.webhook_node_group {
+        output::print_phase("Restoring Webhook Nodes to Baseline");
+        if let Err(e) = nodes::scale_infra_node_group(
+            kubectl,
+            wng,
+            wng.baseline,
+            "webhook",
+            std::time::Duration::from_secs(300),
+        ) {
+            output::print_warning(&format!("Failed to restore webhook nodes: {e}"));
+        }
+    }
+
     // Scale observability node group back to 0
     if let Some(ong) = &config.observability_node_group {
         output::print_action("Scaling observability node to 0...");

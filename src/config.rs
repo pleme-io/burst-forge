@@ -114,6 +114,61 @@ fn default_worker_desired() -> u32 { 3 }
 fn default_worker_baseline() -> u32 { 3 }
 fn default_worker_max_nodes() -> u32 { 6 }
 
+/// Infrastructure node group configuration for the dedicated gateway and
+/// webhook node pools.
+///
+/// Unlike `WorkerNodeGroupConfig` (which uses a fixed `desired` size for the
+/// whole experiment), infra node groups scale dynamically per scenario:
+/// `desired = ceil(deployment_replicas / pods_per_node).clamp(baseline, max_nodes)`.
+///
+/// This lets a single scenario like `gw16-wh12-1000-isolated` automatically
+/// provision the right number of `m5.large` nodes for 16 GW pods at 1536Mi
+/// each (4 pods/node × 4 nodes), without any manual `aws eks` scaling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfraNodeGroupConfig {
+    /// EKS cluster name.
+    pub cluster_name: String,
+    /// Node group name (e.g., "scale-test-gateway", "scale-test-webhook").
+    pub nodegroup_name: String,
+    /// AWS region.
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// AWS profile.
+    #[serde(default)]
+    pub aws_profile: Option<String>,
+    /// How many GW or WH pods fit on one node of this group's instance type.
+    /// E.g., for m5.large (8 GiB) with 1536Mi memory request, 4 pods fit.
+    #[serde(default = "default_infra_pods_per_node")]
+    pub pods_per_node: u32,
+    /// Baseline node count to return to between/after scenarios.
+    /// Default 1 keeps a single warm node for the always-on baseline GW/WH pod.
+    #[serde(default = "default_infra_baseline")]
+    pub baseline: u32,
+    /// Hard ceiling on the node group size.
+    #[serde(default = "default_infra_max_nodes")]
+    pub max_nodes: u32,
+    /// Pad the computed desired count by this many extra nodes for headroom.
+    /// Useful when pods_per_node is a tight ceiling and you want bin-packing
+    /// slack so the scheduler doesn't fail under transient eviction.
+    #[serde(default)]
+    pub headroom_nodes: u32,
+}
+
+fn default_infra_pods_per_node() -> u32 { 4 }
+fn default_infra_baseline() -> u32 { 1 }
+fn default_infra_max_nodes() -> u32 { 16 }
+
+impl InfraNodeGroupConfig {
+    /// Compute the desired node count for the given pod count, clamped between
+    /// `baseline` and `max_nodes`.
+    #[must_use]
+    pub fn desired_for_pods(&self, pod_count: u32) -> u32 {
+        let raw = pod_count.div_ceil(self.pods_per_node.max(1));
+        let with_headroom = raw.saturating_add(self.headroom_nodes);
+        with_headroom.clamp(self.baseline, self.max_nodes)
+    }
+}
+
 /// Image cache configuration for Zot registry lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageCacheConfig {
@@ -247,6 +302,19 @@ pub struct Config {
     /// capacity before any scenario fires.
     #[serde(default)]
     pub worker_node_group: Option<WorkerNodeGroupConfig>,
+
+    /// Dedicated gateway node group. When configured, burst-forge scales it
+    /// dynamically per scenario based on `gateway_replicas / pods_per_node`
+    /// before patching the GW deployment, and back to baseline at cleanup.
+    /// Required for any scenario where the GW deployment exceeds what fits on
+    /// the baseline nodegroup size.
+    #[serde(default)]
+    pub gateway_node_group: Option<InfraNodeGroupConfig>,
+
+    /// Dedicated webhook node group. Same dynamic scaling pattern as
+    /// `gateway_node_group`, sized from `webhook_replicas`.
+    #[serde(default)]
+    pub webhook_node_group: Option<InfraNodeGroupConfig>,
 
     /// Observability node group — scales to 1 during warmup, 0 on cleanup.
     /// Hosts VictoriaMetrics, Grafana, Loki for live experiment metrics.

@@ -6,7 +6,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::config::{NodeGroupConfig, WorkerNodeGroupConfig};
+use crate::config::{InfraNodeGroupConfig, NodeGroupConfig, WorkerNodeGroupConfig};
 use crate::kubectl::KubeCtl;
 use crate::output;
 
@@ -406,6 +406,105 @@ pub fn scale_worker_group(config: &WorkerNodeGroupConfig, desired: u32) -> anyho
 
     output::print_status(&format!("Worker group scaling to {desired}"));
     Ok(())
+}
+
+/// Scale a dedicated infrastructure node group (gateway or webhook) to the
+/// desired count, then block until the node count is observed via the EKS
+/// nodegroup label on Kubernetes nodes.
+///
+/// Used by `phases::run_phase_2_warmup` to provision the right number of
+/// gateway / webhook nodes for the upcoming scenario *before* patching the
+/// HelmRelease replica count, so the scheduler always has somewhere to put
+/// the GW/WH pods.
+///
+/// # Errors
+///
+/// Returns an error if the AWS API call fails or the timeout is exceeded
+/// waiting for nodes to come up.
+pub fn scale_infra_node_group(
+    kubectl: &KubeCtl,
+    config: &InfraNodeGroupConfig,
+    desired: u32,
+    role: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    // Wait for nodegroup to be ACTIVE before scaling
+    wait_for_nodegroup_status(
+        &config.cluster_name,
+        &config.nodegroup_name,
+        &config.region,
+        config.aws_profile.as_deref(),
+        "ACTIVE",
+        Duration::from_secs(300),
+    )?;
+
+    let desired = desired.clamp(config.baseline, config.max_nodes);
+
+    output::print_action(&format!(
+        "Scaling {role} node group {} to {desired} nodes...",
+        config.nodegroup_name
+    ));
+
+    let scaling_config = format!(
+        "minSize={min},maxSize={max},desiredSize={desired}",
+        min = config.baseline.min(desired),
+        max = config.max_nodes,
+    );
+
+    let mut cmd = Command::new("aws");
+    cmd.args([
+        "eks",
+        "update-nodegroup-config",
+        "--cluster-name",
+        &config.cluster_name,
+        "--nodegroup-name",
+        &config.nodegroup_name,
+        "--scaling-config",
+        &scaling_config,
+        "--region",
+        &config.region,
+    ]);
+
+    if let Some(profile) = &config.aws_profile {
+        cmd.args(["--profile", profile]);
+    }
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "aws eks update-nodegroup-config ({role}) failed: {}",
+            stderr.trim()
+        );
+    }
+
+    output::print_status(&format!("{role} node group scaling to {desired}"));
+
+    // Wait for the nodegroup to actually have `desired` Ready nodes.
+    let start = Instant::now();
+    let poll = Duration::from_secs(15);
+    loop {
+        let count = count_nodes_by_nodegroup(kubectl, &config.nodegroup_name)?;
+        if count >= desired {
+            output::print_status(&format!(
+                "{role} node group at {count}/{desired} nodes (ready)"
+            ));
+            return Ok(());
+        }
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "{role} node group {} did not reach {desired} nodes within {}s (last seen: {count})",
+                config.nodegroup_name,
+                timeout.as_secs(),
+            );
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed = start.elapsed().as_secs();
+        output::print_progress(elapsed, &format!(
+            "{role} nodes: {count}/{desired} -- waiting..."
+        ));
+        std::thread::sleep(poll);
+    }
 }
 
 /// Count nodes belonging to a specific nodegroup by label.

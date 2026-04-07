@@ -211,6 +211,24 @@ pub fn run_phase_2_warmup(
             "-p", r#"{"spec":{"suspend":true}}"#,
         ]);
 
+        // 2c.0: Scale dedicated GW node group BEFORE scaling the deployment.
+        // The scheduler must have somewhere to put N GW pods or the rollout
+        // wait will time out at "GW <fewer>/<expected> ready".
+        if let Some(gng) = &config.gateway_node_group {
+            let needed = gng.desired_for_pods(scenario.gateway_replicas);
+            output::print_action(&format!(
+                "  Gateway nodes: {} pods × {} pods/node => {needed} nodes",
+                scenario.gateway_replicas, gng.pods_per_node
+            ));
+            crate::nodes::scale_infra_node_group(
+                kubectl,
+                gng,
+                needed,
+                "gateway",
+                Duration::from_secs(config.rollout_wait_secs),
+            )?;
+        }
+
         // Scale gateway
         output::print_action(&format!(
             "  Gateway -> {} replicas...", scenario.gateway_replicas
@@ -237,6 +255,22 @@ pub fn run_phase_2_warmup(
     // 2d: Webhook scaling
     let sub_start = Instant::now();
     if !skip_scaling {
+        // 2d.0: Same dynamic node-group scale for webhook before deployment patch.
+        if let Some(wng) = &config.webhook_node_group {
+            let needed = wng.desired_for_pods(scenario.webhook_replicas);
+            output::print_action(&format!(
+                "  Webhook nodes: {} pods × {} pods/node => {needed} nodes",
+                scenario.webhook_replicas, wng.pods_per_node
+            ));
+            crate::nodes::scale_infra_node_group(
+                kubectl,
+                wng,
+                needed,
+                "webhook",
+                Duration::from_secs(config.rollout_wait_secs),
+            )?;
+        }
+
         output::print_action(&format!(
             "  Webhook -> {} replicas...", scenario.webhook_replicas
         ));
