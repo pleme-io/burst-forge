@@ -111,6 +111,55 @@ pub fn run_phase_2_warmup(
     let phase_start = Instant::now();
     let mut timings = WarmupTimings::default();
 
+    // 2a-pre: Pre-scale webhook BEFORE burst nodes join.
+    //
+    // At 30+ burst nodes, the DaemonSet pod creation storm (image-warmup,
+    // node-exporter, vector-logs, containerd-mirror — all in non-kube-system
+    // namespaces) overwhelms the webhook admission chain if it's still at 1
+    // replica. Scaling the webhook to scenario replicas FIRST gives it enough
+    // capacity to handle the burst. The webhook nodegroup is also scaled to
+    // fit the higher replica count.
+    if !skip_scaling {
+        if let Some(wng) = &config.webhook_node_group {
+            let needed = wng.desired_for_pods(scenario.webhook_replicas);
+            output::print_action(&format!(
+                "2a-pre. Pre-scaling webhook for burst admission: {} pods × {} pods/node => {needed} nodes",
+                scenario.webhook_replicas, wng.pods_per_node
+            ));
+            crate::nodes::scale_infra_node_group(
+                kubectl,
+                wng,
+                needed,
+                "webhook",
+                Duration::from_secs(config.rollout_wait_secs),
+            )?;
+        }
+
+        // Suspend HelmReleases early so we can scale webhook deployment
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch", "helmrelease",
+            &config.webhook_release, "--type=merge",
+            "-p", r#"{"spec":{"suspend":true}}"#,
+        ]);
+
+        output::print_action(&format!(
+            "  Webhook -> {} replicas (pre-burst)...", scenario.webhook_replicas
+        ));
+        kubectl.run(&[
+            "-n", &config.injection_namespace, "scale", "deployment",
+            &config.webhook_deployment,
+            &format!("--replicas={}", scenario.webhook_replicas),
+        ])?;
+
+        // Brief wait for webhook pods to come up before the node storm
+        let wh_deploy_path = format!("deployment/{}", config.webhook_deployment);
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "rollout", "status",
+            &wh_deploy_path,
+            &format!("--timeout={}s", config.rollout_wait_secs),
+        ]);
+    }
+
     // 2a: Node scaling
     let sub_start = Instant::now();
     if let Some(ng) = &config.node_group {
