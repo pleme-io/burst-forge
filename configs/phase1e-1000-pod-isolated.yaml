@@ -26,6 +26,10 @@ node_poll_interval_secs: 15
 drain_timeout_secs: 120
 drain_poll_interval_secs: 5
 ipamd_warmup_secs: 60
+# Bumped from 180s to 300s: at gw=16 the gateway autoscaler may need to
+# provision 2-3 new m5.large nodes to fit the larger memory requests, and
+# 180s is borderline once node bootstrap is in the critical path.
+rollout_wait_secs: 300
 suspend_kustomizations:
   - scale-test-workloads
 injection_mode: env
