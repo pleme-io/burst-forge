@@ -452,12 +452,21 @@ pub fn apply_infrastructure_patches(
         }
     }
 
-    // Gateway memory override
+    // Gateway memory override.
+    //
+    // When only `gateway_memory_limit` is specified, default the REQUEST to
+    // the same value as the LIMIT. The previous default (`256Mi`) caused the
+    // scheduler to pack 16 GW pods onto a single m5.large because it only
+    // sees the request, then the kernel OOM-killed pods at runtime when their
+    // actual usage exceeded the per-node RAM ceiling — Phase 1e gw16 spent
+    // 339s in an OOM-restart loop before stabilizing. Setting request = limit
+    // forces the scheduler to spread pods proportional to real memory usage
+    // and avoids the entire flap.
     if scenario.gateway_memory_request.is_some() || scenario.gateway_memory_limit.is_some() {
         let gw_dep = &config.gateway_deployment;
         let gw_name = &config.gateway_container_name;
-        let req = scenario.gateway_memory_request.as_deref().unwrap_or("256Mi");
-        let limit = scenario.gateway_memory_limit.as_deref().unwrap_or("512Mi");
+        let limit = scenario.gateway_memory_limit.as_deref().unwrap_or("1536Mi");
+        let req = scenario.gateway_memory_request.as_deref().unwrap_or(limit);
         crate::output::print_action(&format!("Setting GW memory: request={req}, limit={limit}"));
         let patch = serde_json::to_string(&serde_json::json!({
             "spec": {"template": {"spec": {"containers": [{
@@ -468,12 +477,12 @@ pub fn apply_infrastructure_patches(
         kubectl.run(&["-n", inj_ns, "patch", "deployment", gw_dep, "--type=strategic", "-p", &patch])?;
     }
 
-    // Webhook memory override
+    // Webhook memory override — same request=limit default for the same reason.
     if scenario.webhook_memory_request.is_some() || scenario.webhook_memory_limit.is_some() {
         let wh_dep = &config.webhook_deployment;
         let wh_name = &config.webhook_container_name;
-        let req = scenario.webhook_memory_request.as_deref().unwrap_or("128Mi");
         let limit = scenario.webhook_memory_limit.as_deref().unwrap_or("256Mi");
+        let req = scenario.webhook_memory_request.as_deref().unwrap_or(limit);
         crate::output::print_action(&format!("Setting WH memory: request={req}, limit={limit}"));
         let patch = serde_json::to_string(&serde_json::json!({
             "spec": {"template": {"spec": {"containers": [{
