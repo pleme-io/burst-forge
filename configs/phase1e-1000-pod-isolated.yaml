@@ -62,16 +62,17 @@ worker_node_group:
   region: us-east-1
   aws_profile: akeyless-development
   desired: 4
-  baseline: 3
+  baseline: 1
 # Dedicated GW node group — burst-forge auto-scales it per scenario based on
 # `gateway_replicas / pods_per_node`. m5.large fits ~4 GW pods at 1536Mi each.
+# Baseline 0: gateway only needed during runs.
 gateway_node_group:
   cluster_name: scale-test
   nodegroup_name: scale-test-gateway
   region: us-east-1
   aws_profile: akeyless-development
   pods_per_node: 4
-  baseline: 1
+  baseline: 0
   max_nodes: 16
   headroom_nodes: 0
 # Dedicated WH node group — same dynamic scaling pattern. t3.medium fits ~6
