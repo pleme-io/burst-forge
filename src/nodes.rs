@@ -457,3 +457,48 @@ pub fn wait_for_zero_burst_nodes(
         std::thread::sleep(poll);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calculate_nodes_normal() {
+        assert_eq!(calculate_nodes(100, 58), 3);
+    }
+
+    #[test]
+    fn calculate_nodes_exact_fit() {
+        assert_eq!(calculate_nodes(58, 58), 2);
+    }
+
+    #[test]
+    fn calculate_nodes_zero_pods_per_node() {
+        assert_eq!(calculate_nodes(100, 0), 1);
+    }
+
+    #[test]
+    fn calculate_nodes_zero_replicas() {
+        assert_eq!(calculate_nodes(0, 58), 1);
+    }
+
+    #[test]
+    fn calculate_nodes_one_replica() {
+        assert_eq!(calculate_nodes(1, 58), 2);
+    }
+
+    #[test]
+    fn calculate_nodes_large_scale() {
+        assert_eq!(calculate_nodes(1000, 58), 19);
+    }
+
+    #[test]
+    fn calculate_nodes_small_pods_per_node() {
+        assert_eq!(calculate_nodes(10, 1), 11);
+    }
+
+    #[test]
+    fn calculate_nodes_one_pod_per_node() {
+        assert_eq!(calculate_nodes(1, 1), 2);
+    }
+}

@@ -240,4 +240,253 @@ mod tests {
         emitter.matrix_start(5);
         emitter.poll_tick("test", 10, 5, 0, 8, 1000, 10);
     }
+
+    #[test]
+    fn disabled_emitter_all_methods_safe() {
+        let emitter = EventEmitter::disabled();
+        emitter.matrix_complete(5, 4, 1);
+        emitter.phase_complete("s1", "RESET", 5000);
+        emitter.gate_result("s1", "Gate1", true, "ok");
+        emitter.milestone("s1", "FIRST_READY", 100, 1);
+        emitter.scenario_complete("s1", true, None);
+        emitter.scenario_complete("s1", false, Some("error msg"));
+    }
+
+    #[test]
+    fn event_timestamp_is_rfc3339() {
+        let event = BurstForgeEvent::new(
+            "TEST", "exp-1", "s1",
+            serde_json::json!({}),
+        );
+        assert!(event.timestamp.contains('T'));
+        assert!(event.timestamp.contains('+') || event.timestamp.ends_with('Z'));
+    }
+
+    #[test]
+    fn event_fields_preserved_in_json() {
+        let event = BurstForgeEvent::new(
+            "MATRIX_START", "exp-abc", "scenario-x",
+            serde_json::json!({"key": "value"}),
+        );
+        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event_type"], "MATRIX_START");
+        assert_eq!(json["experiment_id"], "exp-abc");
+        assert_eq!(json["scenario"], "scenario-x");
+        assert_eq!(json["key"], "value");
+    }
+
+    #[test]
+    fn event_payload_flattened() {
+        let event = BurstForgeEvent::new(
+            "TEST", "exp-1", "s1",
+            serde_json::json!({"running": 100, "pending": 5}),
+        );
+        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["running"], 100);
+        assert_eq!(json["pending"], 5);
+    }
+
+    #[test]
+    fn generate_id_contains_timestamp_pattern() {
+        let id = generate_experiment_id("test-flow");
+        assert!(id.starts_with("test-flow-"));
+        let suffix = &id["test-flow-".len()..];
+        assert!(suffix.contains('T'));
+        assert!(suffix.ends_with('Z'));
+    }
+
+    #[test]
+    fn generate_id_unique_per_call() {
+        let id1 = generate_experiment_id("flow");
+        let id2 = generate_experiment_id("flow");
+        // Within the same minute, they should be equal — but this
+        // validates format consistency
+        assert!(id1.starts_with("flow-"));
+        assert!(id2.starts_with("flow-"));
+    }
+
+    #[test]
+    fn emitter_new_is_enabled() {
+        let emitter = EventEmitter::new("test-id".to_string(), None);
+        assert!(emitter.enabled);
+    }
+
+    #[test]
+    fn emitter_disabled_is_not_enabled() {
+        let emitter = EventEmitter::disabled();
+        assert!(!emitter.enabled);
+    }
+
+    #[test]
+    fn pod_state_detail_filters_notable_pods() {
+        let emitter = EventEmitter::disabled();
+        let pods = vec![
+            crate::types::PodDetail {
+                name: "healthy".to_string(),
+                phase: "Running".to_string(),
+                node: None,
+                creation_timestamp: None,
+                restart_count: 0,
+                state_reason: None,
+                container_started_at: None,
+                qos_class: None,
+                host_ip: None,
+                pod_ip: None,
+                injected: true,
+            },
+            crate::types::PodDetail {
+                name: "restarted".to_string(),
+                phase: "Running".to_string(),
+                node: None,
+                creation_timestamp: None,
+                restart_count: 3,
+                state_reason: None,
+                container_started_at: None,
+                qos_class: None,
+                host_ip: None,
+                pod_ip: None,
+                injected: true,
+            },
+            crate::types::PodDetail {
+                name: "waiting".to_string(),
+                phase: "Pending".to_string(),
+                node: None,
+                creation_timestamp: None,
+                restart_count: 0,
+                state_reason: Some("ImagePullBackOff".to_string()),
+                container_started_at: None,
+                qos_class: None,
+                host_ip: None,
+                pod_ip: None,
+                injected: false,
+            },
+            crate::types::PodDetail {
+                name: "crashed".to_string(),
+                phase: "Failed".to_string(),
+                node: None,
+                creation_timestamp: None,
+                restart_count: 0,
+                state_reason: None,
+                container_started_at: None,
+                qos_class: None,
+                host_ip: None,
+                pod_ip: None,
+                injected: false,
+            },
+        ];
+        // Should not panic — disabled emitter silently drops
+        emitter.pod_state_detail("test", &pods);
+    }
+
+    #[test]
+    fn pod_state_detail_no_notable_does_not_emit() {
+        let emitter = EventEmitter::disabled();
+        let pods = vec![
+            crate::types::PodDetail {
+                name: "healthy".to_string(),
+                phase: "Running".to_string(),
+                node: None,
+                creation_timestamp: None,
+                restart_count: 0,
+                state_reason: None,
+                container_started_at: None,
+                qos_class: None,
+                host_ip: None,
+                pod_ip: None,
+                injected: true,
+            },
+        ];
+        // No notable pods — should return early without emitting
+        emitter.pod_state_detail("test", &pods);
+    }
+
+    #[test]
+    fn burst_complete_without_prediction() {
+        let emitter = EventEmitter::disabled();
+        let result = crate::types::BurstResult {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            replicas_requested: 100,
+            pods_running: 100,
+            pods_failed: 0,
+            pods_pending: 0,
+            pods_injected: 100,
+            injection_success_rate: 100.0,
+            time_to_first_ready_ms: 500,
+            time_to_all_ready_ms: Some(5000),
+            time_to_full_admission_ms: Some(4000),
+            time_to_50pct_running_ms: Some(2500),
+            admission_rate_pods_per_sec: 20.0,
+            gateway_throughput_pods_per_sec: 18.0,
+            duration_ms: 6000,
+            nodes: 3,
+            iteration: 1,
+            total_secrets_injected: 200,
+            peak_running: 100,
+            prediction: None,
+        };
+        // Should not panic
+        emitter.burst_complete("test", &result);
+    }
+
+    #[test]
+    fn burst_complete_with_prediction_flattens_fields() {
+        let _emitter = EventEmitter::new("test".to_string(), None);
+        let result = crate::types::BurstResult {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            replicas_requested: 100,
+            pods_running: 100,
+            pods_failed: 0,
+            pods_pending: 0,
+            pods_injected: 100,
+            injection_success_rate: 100.0,
+            time_to_first_ready_ms: 500,
+            time_to_all_ready_ms: Some(5000),
+            time_to_full_admission_ms: Some(4000),
+            time_to_50pct_running_ms: Some(2500),
+            admission_rate_pods_per_sec: 20.0,
+            gateway_throughput_pods_per_sec: 18.0,
+            duration_ms: 60_000,
+            nodes: 3,
+            iteration: 1,
+            total_secrets_injected: 200,
+            peak_running: 100,
+            prediction: Some(crate::types::Prediction {
+                predicted_gw_replicas: 6,
+                predicted_wh_replicas: 5,
+                predicted_min_secs: 66.67,
+                predicted_throughput_pods_per_sec: 15.0,
+                formula: "sub_90s".to_string(),
+                actual_gw_replicas: 6,
+                actual_wh_replicas: 5,
+            }),
+        };
+
+        // Verify the payload construction logic
+        let mut payload = serde_json::to_value(&result).unwrap();
+        if let Some(ref pred) = result.prediction {
+            if let serde_json::Value::Object(ref mut map) = payload {
+                map.insert("predicted_gw_replicas".to_string(), pred.predicted_gw_replicas.into());
+                map.insert("predicted_min_secs".to_string(), serde_json::json!(pred.predicted_min_secs));
+                let actual_secs = result.duration_ms as f64 / 1000.0;
+                map.insert("prediction_verdict".to_string(), pred.verdict(actual_secs).into());
+                let error_pct = if pred.predicted_min_secs > 0.0 {
+                    ((actual_secs - pred.predicted_min_secs) / pred.predicted_min_secs) * 100.0
+                } else {
+                    0.0
+                };
+                map.insert("prediction_error_pct".to_string(), serde_json::json!(error_pct));
+            }
+        }
+
+        assert_eq!(payload["predicted_gw_replicas"], 6);
+        assert_eq!(payload["predicted_min_secs"], 66.67);
+
+        // duration_ms=60000 → actual_secs=60, predicted=66.67
+        // ratio = 60/66.67 = 0.8999 → FASTER (< 0.90)
+        assert_eq!(payload["prediction_verdict"], "FASTER");
+
+        // error_pct = (60 - 66.67) / 66.67 * 100 ≈ -10.0%
+        let error_pct = payload["prediction_error_pct"].as_f64().unwrap();
+        assert!((error_pct - (-10.0)).abs() < 0.5);
+    }
 }

@@ -618,4 +618,247 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn image_cache_namespace_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.image_cache_namespace(), "image-cache");
+    }
+
+    #[test]
+    fn image_cache_namespace_override() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"image_cache": {"namespace": "custom-ns", "label": "app=zot", "registry": "zot:5000"}}"#,
+        ).unwrap();
+        assert_eq!(cfg.image_cache_namespace(), "custom-ns");
+    }
+
+    #[test]
+    fn image_cache_label_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.image_cache_label(), "app.kubernetes.io/name=zot");
+    }
+
+    #[test]
+    fn image_cache_label_override() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"image_cache": {"namespace": "ns", "label": "app=custom-zot", "registry": "r:5000"}}"#,
+        ).unwrap();
+        assert_eq!(cfg.image_cache_label(), "app=custom-zot");
+    }
+
+    #[test]
+    fn resolved_cache_registry_none_by_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.resolved_cache_registry().is_none());
+    }
+
+    #[test]
+    fn resolved_cache_registry_from_image_cache() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"image_cache": {"namespace": "ns", "label": "l", "registry": "zot.local:5000"}}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_cache_registry(), Some("zot.local:5000".to_string()));
+    }
+
+    #[test]
+    fn resolved_cache_registry_legacy_fallback() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"cache_registry": "legacy:5000"}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_cache_registry(), Some("legacy:5000".to_string()));
+    }
+
+    #[test]
+    fn resolved_cache_registry_prefers_structured() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"image_cache": {"namespace": "ns", "label": "l", "registry": "new:5000"}, "cache_registry": "old:5000"}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_cache_registry(), Some("new:5000".to_string()));
+    }
+
+    #[test]
+    fn flux_namespace_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.flux_namespace(), "flux-system");
+    }
+
+    #[test]
+    fn flux_namespace_override() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"flux": {"namespace": "custom-flux", "kustomizations": []}}"#,
+        ).unwrap();
+        assert_eq!(cfg.flux_namespace(), "custom-flux");
+    }
+
+    #[test]
+    fn resolved_flux_kustomizations_empty_by_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.resolved_flux_kustomizations().is_empty());
+    }
+
+    #[test]
+    fn resolved_flux_kustomizations_from_structured() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"flux": {"namespace": "ns", "kustomizations": ["a", "b"]}}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_flux_kustomizations(), &["a", "b"]);
+    }
+
+    #[test]
+    fn resolved_flux_kustomizations_legacy_fallback() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"flux_kustomizations": ["legacy-a"]}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_flux_kustomizations(), &["legacy-a"]);
+    }
+
+    #[test]
+    fn resolved_flux_kustomizations_prefers_structured() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"flux": {"namespace": "ns", "kustomizations": ["new"]}, "flux_kustomizations": ["old"]}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_flux_kustomizations(), &["new"]);
+    }
+
+    #[test]
+    fn resolved_flux_kustomizations_empty_structured_falls_back() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"flux": {"namespace": "ns", "kustomizations": []}, "flux_kustomizations": ["fallback"]}"#,
+        ).unwrap();
+        assert_eq!(cfg.resolved_flux_kustomizations(), &["fallback"]);
+    }
+
+    #[test]
+    fn injection_mode_serde() {
+        let cfg: Config = serde_json::from_str(r#"{"injection_mode": "sidecar"}"#).unwrap();
+        assert_eq!(cfg.injection_mode, InjectionMode::Sidecar);
+
+        let cfg: Config = serde_json::from_str(r#"{"injection_mode": "env"}"#).unwrap();
+        assert_eq!(cfg.injection_mode, InjectionMode::Env);
+    }
+
+    #[test]
+    fn injection_mode_default_is_env() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.injection_mode, InjectionMode::Env);
+    }
+
+    #[test]
+    fn workload_kind_serde() {
+        let cfg: Config = serde_json::from_str(r#"{"workload_kind": "job"}"#).unwrap();
+        assert_eq!(cfg.workload_kind, WorkloadKind::Job);
+
+        let cfg: Config = serde_json::from_str(r#"{"workload_kind": "deployment"}"#).unwrap();
+        assert_eq!(cfg.workload_kind, WorkloadKind::Deployment);
+    }
+
+    #[test]
+    fn workload_kind_default_is_deployment() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.workload_kind, WorkloadKind::Deployment);
+    }
+
+    #[test]
+    fn reset_config_default() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.reset.force_delete);
+        assert_eq!(cfg.reset.grace_period_secs, 30);
+    }
+
+    #[test]
+    fn reset_config_override() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"reset": {"force_delete": true, "grace_period_secs": 5}}"#,
+        ).unwrap();
+        assert!(cfg.reset.force_delete);
+        assert_eq!(cfg.reset.grace_period_secs, 5);
+    }
+
+    #[test]
+    fn scenario_with_all_overrides() {
+        let s: Scenario = serde_json::from_str(r#"{
+            "name": "full",
+            "replicas": 500,
+            "gateway_replicas": 10,
+            "webhook_replicas": 5,
+            "nodes": 20,
+            "init_sleep_secs": 3,
+            "pod_memory_request": "4Gi",
+            "pod_memory_limit": "8Gi",
+            "expected_secrets": 4,
+            "webhook_cpu_request": "100m",
+            "webhook_cpu_limit": "200m",
+            "gateway_cpu_request": "500m",
+            "gateway_cpu_limit": "1000m",
+            "gateway_memory_request": "512Mi",
+            "gateway_memory_limit": "1Gi",
+            "webhook_memory_request": "256Mi",
+            "webhook_memory_limit": "512Mi"
+        }"#).unwrap();
+        assert_eq!(s.replicas, 500);
+        assert_eq!(s.gateway_replicas, 10);
+        assert_eq!(s.webhook_replicas, 5);
+        assert_eq!(s.nodes, Some(20));
+        assert_eq!(s.init_sleep_secs, Some(3));
+        assert_eq!(s.pod_memory_request.as_deref(), Some("4Gi"));
+        assert_eq!(s.pod_memory_limit.as_deref(), Some("8Gi"));
+        assert_eq!(s.expected_secrets, Some(4));
+        assert_eq!(s.webhook_cpu_request.as_deref(), Some("100m"));
+        assert_eq!(s.gateway_memory_limit.as_deref(), Some("1Gi"));
+    }
+
+    #[test]
+    fn config_verify_teardown_default_true() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.verify_teardown);
+    }
+
+    #[test]
+    fn config_strict_gates_default_true() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.strict_gates);
+    }
+
+    #[test]
+    fn config_default_injection_env_prefix() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.injection_env_prefix, "AKEYLESS_");
+    }
+
+    #[test]
+    fn config_default_secret_path_prefix() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.secret_path_prefix, "/pleme/test/hello");
+    }
+
+    #[test]
+    fn config_default_qps_and_secrets() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.qps, 5);
+        assert_eq!(cfg.secrets_per_pod, 2);
+    }
+
+    #[test]
+    fn node_group_config_defaults() {
+        let ng: NodeGroupConfig = serde_json::from_str(r#"{
+            "cluster_name": "test-cluster",
+            "nodegroup_name": "burst-ng"
+        }"#).unwrap();
+        assert_eq!(ng.region, "us-east-1");
+        assert_eq!(ng.pods_per_node, 58);
+        assert_eq!(ng.max_nodes, 20);
+        assert!(ng.aws_profile.is_none());
+    }
+
+    #[test]
+    fn worker_node_group_config_defaults() {
+        let wng: WorkerNodeGroupConfig = serde_json::from_str(r#"{
+            "cluster_name": "test-cluster",
+            "nodegroup_name": "worker-ng"
+        }"#).unwrap();
+        assert_eq!(wng.desired, 3);
+        assert_eq!(wng.baseline, 3);
+        assert_eq!(wng.max_nodes, 6);
+    }
 }

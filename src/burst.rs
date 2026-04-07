@@ -487,3 +487,273 @@ pub fn apply_infrastructure_patches(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_mode_config() -> Config {
+        serde_json::from_str(r#"{
+            "injection_mode": "env",
+            "injection_env_prefix": "AKEYLESS_"
+        }"#).unwrap()
+    }
+
+    fn sidecar_mode_config() -> Config {
+        serde_json::from_str(r#"{
+            "injection_mode": "sidecar"
+        }"#).unwrap()
+    }
+
+    #[test]
+    fn has_injection_env_mode_with_matching_env() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [{
+                    "name": "nginx",
+                    "env": [
+                        {"name": "AKEYLESS_SECRET_1", "value": "val1"},
+                        {"name": "OTHER_VAR", "value": "val2"}
+                    ]
+                }]
+            }
+        });
+        assert!(has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_mode_no_matching_env() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [{
+                    "name": "nginx",
+                    "env": [
+                        {"name": "OTHER_VAR", "value": "val1"}
+                    ]
+                }]
+            }
+        });
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_mode_no_env_array() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [{"name": "nginx"}]
+            }
+        });
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_mode_no_containers() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({"spec": {}});
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_mode_empty_containers() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {"containers": []}
+        });
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_mode_multiple_containers_second_has_env() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [
+                    {"name": "nginx", "env": [{"name": "OTHER", "value": "v"}]},
+                    {"name": "sidecar", "env": [{"name": "AKEYLESS_PATH", "value": "/secret"}]}
+                ]
+            }
+        });
+        assert!(has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_sidecar_mode_single_container() {
+        let config = sidecar_mode_config();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "nginx"}]}
+        });
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_sidecar_mode_two_containers() {
+        let config = sidecar_mode_config();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "nginx"}, {"name": "sidecar"}]}
+        });
+        assert!(has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_sidecar_mode_three_containers() {
+        let config = sidecar_mode_config();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}
+        });
+        assert!(has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_sidecar_mode_no_containers() {
+        let config = sidecar_mode_config();
+        let pod = serde_json::json!({"spec": {}});
+        assert!(!has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn injection_secret_count_multiple_secrets() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [{
+                    "name": "nginx",
+                    "env": [
+                        {"name": "AKEYLESS_SECRET_1", "value": "v1"},
+                        {"name": "AKEYLESS_SECRET_2", "value": "v2"},
+                        {"name": "OTHER_VAR", "value": "v3"}
+                    ]
+                }]
+            }
+        });
+        assert_eq!(injection_secret_count(&pod, &config), 2);
+    }
+
+    #[test]
+    fn injection_secret_count_zero() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [{
+                    "name": "nginx",
+                    "env": [{"name": "OTHER", "value": "v"}]
+                }]
+            }
+        });
+        assert_eq!(injection_secret_count(&pod, &config), 0);
+    }
+
+    #[test]
+    fn injection_secret_count_no_containers() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({"spec": {}});
+        assert_eq!(injection_secret_count(&pod, &config), 0);
+    }
+
+    #[test]
+    fn injection_secret_count_across_containers() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {
+                "containers": [
+                    {"name": "c1", "env": [{"name": "AKEYLESS_A", "value": "v"}]},
+                    {"name": "c2", "env": [{"name": "AKEYLESS_B", "value": "v"}, {"name": "AKEYLESS_C", "value": "v"}]}
+                ]
+            }
+        });
+        assert_eq!(injection_secret_count(&pod, &config), 3);
+    }
+
+    #[test]
+    fn injection_secret_count_no_env_on_container() {
+        let config = env_mode_config();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "nginx"}]}
+        });
+        assert_eq!(injection_secret_count(&pod, &config), 0);
+    }
+
+    #[test]
+    fn count_pod_states_mixed_phases() {
+        let config = env_mode_config();
+        let items = vec![
+            serde_json::json!({"status": {"phase": "Running"}, "spec": {"containers": [{"name": "n", "env": [{"name": "AKEYLESS_X", "value": "v"}]}]}}),
+            serde_json::json!({"status": {"phase": "Running"}, "spec": {"containers": [{"name": "n"}]}}),
+            serde_json::json!({"status": {"phase": "Pending"}, "spec": {"containers": [{"name": "n"}]}}),
+            serde_json::json!({"status": {"phase": "Failed"}, "spec": {"containers": [{"name": "n"}]}}),
+            serde_json::json!({"status": {"phase": "Succeeded"}, "spec": {"containers": [{"name": "n"}]}}),
+        ];
+        let (running, pending, failed, injected) = count_pod_states(&items, &config);
+        assert_eq!(running, 2);
+        assert_eq!(pending, 1);
+        assert_eq!(failed, 1);
+        assert_eq!(injected, 1);
+    }
+
+    #[test]
+    fn count_pod_states_empty() {
+        let config = env_mode_config();
+        let items: Vec<serde_json::Value> = vec![];
+        let (running, pending, failed, injected) = count_pod_states(&items, &config);
+        assert_eq!(running, 0);
+        assert_eq!(pending, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(injected, 0);
+    }
+
+    #[test]
+    fn count_pod_states_all_running_all_injected() {
+        let config = env_mode_config();
+        let items: Vec<serde_json::Value> = (0..5)
+            .map(|_| serde_json::json!({
+                "status": {"phase": "Running"},
+                "spec": {"containers": [{"name": "n", "env": [{"name": "AKEYLESS_S", "value": "v"}]}]}
+            }))
+            .collect();
+        let (running, pending, failed, injected) = count_pod_states(&items, &config);
+        assert_eq!(running, 5);
+        assert_eq!(pending, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(injected, 5);
+    }
+
+    #[test]
+    fn count_pod_states_unknown_phase_ignored() {
+        let config = env_mode_config();
+        let items = vec![
+            serde_json::json!({"status": {"phase": "Unknown"}, "spec": {"containers": []}}),
+            serde_json::json!({"status": {}, "spec": {"containers": []}}),
+        ];
+        let (running, pending, failed, injected) = count_pod_states(&items, &config);
+        assert_eq!(running, 0);
+        assert_eq!(pending, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(injected, 0);
+    }
+
+    #[test]
+    fn has_injection_env_prefix_exact_match() {
+        let config: Config = serde_json::from_str(r#"{
+            "injection_mode": "env",
+            "injection_env_prefix": "MY_PREFIX_"
+        }"#).unwrap();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "c", "env": [{"name": "MY_PREFIX_SECRET", "value": "v"}]}]}
+        });
+        assert!(has_injection(&pod, &config));
+    }
+
+    #[test]
+    fn has_injection_env_prefix_no_match_partial() {
+        let config: Config = serde_json::from_str(r#"{
+            "injection_mode": "env",
+            "injection_env_prefix": "MY_PREFIX_"
+        }"#).unwrap();
+        let pod = serde_json::json!({
+            "spec": {"containers": [{"name": "c", "env": [{"name": "MY_PREFIX", "value": "v"}]}]}
+        });
+        assert!(!has_injection(&pod, &config));
+    }
+}
+
