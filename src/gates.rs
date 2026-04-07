@@ -486,3 +486,93 @@ pub fn check_drain_gate(
         std::thread::sleep(poll_interval);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enforce_pass_strict_returns_ok() {
+        let result = GateResult::pass(
+            "[Gate 1]",
+            "Node Ready 10/10".to_string(),
+            "All nodes ready".to_string(),
+        );
+        assert!(enforce(&result, true).is_ok());
+    }
+
+    #[test]
+    fn enforce_pass_non_strict_returns_ok() {
+        let result = GateResult::pass(
+            "[Gate 1]",
+            "Node Ready 10/10".to_string(),
+            "All nodes ready".to_string(),
+        );
+        assert!(enforce(&result, false).is_ok());
+    }
+
+    #[test]
+    fn enforce_fail_strict_returns_error() {
+        let result = GateResult::fail(
+            "[Gate 3]",
+            "Infrastructure".to_string(),
+            "GW not ready".to_string(),
+            "GW 6/6 ready".to_string(),
+            "GW 4/6 ready".to_string(),
+        );
+        let err = enforce(&result, true);
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("[Gate 3] FAILED"));
+        assert!(msg.contains("GW not ready"));
+    }
+
+    #[test]
+    fn enforce_fail_non_strict_returns_ok() {
+        let result = GateResult::fail(
+            "[Gate 3]",
+            "Infrastructure".to_string(),
+            "GW not ready".to_string(),
+            "GW 6/6 ready".to_string(),
+            "GW 4/6 ready".to_string(),
+        );
+        assert!(enforce(&result, false).is_ok());
+    }
+
+    #[test]
+    fn enforce_fail_without_expected_no_panic() {
+        let result = GateResult {
+            gate: "[Gate 2]",
+            passed: false,
+            message: "Warmup failed".to_string(),
+            detail: "Warmup".to_string(),
+            expected: String::new(),
+            actual: String::new(),
+        };
+        assert!(enforce(&result, false).is_ok());
+        assert!(enforce(&result, true).is_err());
+    }
+
+    #[test]
+    fn gate_result_pass_has_empty_expected_actual() {
+        let r = GateResult::pass("[Gate 1]", "detail".to_string(), "msg".to_string());
+        assert!(r.passed);
+        assert!(r.expected.is_empty());
+        assert!(r.actual.is_empty());
+    }
+
+    #[test]
+    fn gate_result_fail_preserves_diagnostics() {
+        let r = GateResult::fail(
+            "[Gate 4]",
+            "Starting Line".to_string(),
+            "Not clean".to_string(),
+            "0 pods".to_string(),
+            "5 pods".to_string(),
+        );
+        assert!(!r.passed);
+        assert_eq!(r.expected, "0 pods");
+        assert_eq!(r.actual, "5 pods");
+        assert_eq!(r.gate, "[Gate 4]");
+    }
+}

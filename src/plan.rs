@@ -580,6 +580,161 @@ mod tests {
         assert_eq!(phase6.scenarios[2].replicas, 1000);
     }
 
+    #[test]
+    fn gw_sub_90s_small_scale() {
+        // 50 pods * 2 secrets / (5 * 67) = 100/335 = 0.2985 → 1
+        assert_eq!(gw_for_sub_90s(50, 2, 5), 1);
+    }
+
+    #[test]
+    fn gw_sub_90s_zero_pods() {
+        assert_eq!(gw_for_sub_90s(0, 2, 5), 0);
+    }
+
+    #[test]
+    fn gw_sub_90s_zero_secrets() {
+        assert_eq!(gw_for_sub_90s(1000, 0, 5), 0);
+    }
+
+    #[test]
+    fn gw_sub_90s_high_qps() {
+        // 1000 * 2 / (100 * 67) = 2000/6700 = 0.298 → 1
+        assert_eq!(gw_for_sub_90s(1000, 2, 100), 1);
+    }
+
+    #[test]
+    fn gw_sub_90s_many_secrets() {
+        // 1000 * 10 / (5 * 67) = 10000/335 = 29.85 → 30
+        assert_eq!(gw_for_sub_90s(1000, 10, 5), 30);
+    }
+
+    #[test]
+    fn gw_sub_3min_zero_pods() {
+        assert_eq!(gw_for_sub_3min(0, 2, 5), 0);
+    }
+
+    #[test]
+    fn gw_sub_3min_small_scale() {
+        // 50 * 2 / (5 * 91) = 100/455 = 0.22 → 1
+        assert_eq!(gw_for_sub_3min(50, 2, 5), 1);
+    }
+
+    #[test]
+    fn wh_optimal_zero_pods() {
+        assert_eq!(wh_optimal(0), 3);
+    }
+
+    #[test]
+    fn wh_optimal_boundary_300_to_301() {
+        assert_eq!(wh_optimal(300), 3);
+        assert_eq!(wh_optimal(301), 4);
+    }
+
+    #[test]
+    fn wh_optimal_boundary_499_to_500() {
+        assert_eq!(wh_optimal(499), 4);
+        assert_eq!(wh_optimal(500), 5);
+    }
+
+    #[test]
+    fn wh_optimal_very_large() {
+        assert_eq!(wh_optimal(100_000), 5);
+    }
+
+    #[test]
+    fn gw_memory_min_boundary() {
+        assert_eq!(gw_memory_min(5), "768Mi");
+        assert_eq!(gw_memory_min(6), "1Gi");
+    }
+
+    #[test]
+    fn gw_memory_min_zero() {
+        assert_eq!(gw_memory_min(0), "768Mi");
+    }
+
+    #[test]
+    fn theoretical_min_secs_zero_pods() {
+        let t = theoretical_min_secs(0, 2, 6, 5);
+        assert!((t - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn theoretical_min_secs_one_gw_one_qps() {
+        // 100 * 2 / (1 * 1) = 200
+        let t = theoretical_min_secs(100, 2, 1, 1);
+        assert!((t - 200.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn memory_sweep_values_correct() {
+        let vals = memory_sweep_values();
+        assert_eq!(vals.len(), 5);
+        assert!(vals.contains(&"512Mi"));
+        assert!(vals.contains(&"2Gi"));
+    }
+
+    #[test]
+    fn wh_sweep_values_correct() {
+        let vals = wh_sweep_values();
+        assert_eq!(vals.len(), 6);
+        assert_eq!(vals[0], 3);
+        assert_eq!(*vals.last().unwrap(), 15);
+    }
+
+    #[test]
+    fn gw_sweep_from_baseline_zero() {
+        let sweep = gw_sweep_values(0);
+        assert_eq!(sweep, vec![0, 5, 10]);
+    }
+
+    #[test]
+    fn plan_all_phases_numbered_sequentially() {
+        let profile = test_profile();
+        let plan = generate_plan(&profile, "clusters/test.yaml").unwrap();
+        for (i, phase) in plan.phases.iter().enumerate() {
+            assert_eq!(phase.phase as usize, i + 1);
+        }
+    }
+
+    #[test]
+    fn plan_phase5_has_headroom_variant() {
+        let profile = test_profile();
+        let plan = generate_plan(&profile, "clusters/test.yaml").unwrap();
+        let phase5 = &plan.phases[4];
+        assert_eq!(phase5.scenarios.len(), 2);
+        assert!(phase5.scenarios[1].name.contains("headroom"));
+        assert!(phase5.scenarios[1].gw >= phase5.scenarios[0].gw);
+    }
+
+    #[test]
+    fn plan_phase4_network_isolation_has_baseline() {
+        let profile = test_profile();
+        let plan = generate_plan(&profile, "clusters/test.yaml").unwrap();
+        let phase4 = &plan.phases[3];
+        assert_eq!(phase4.scenarios.len(), 2);
+        assert!(phase4.scenarios[0].name.contains("baseline"));
+    }
+
+    #[test]
+    fn plan_phase7_endurance_scenarios() {
+        let profile = test_profile();
+        let plan = generate_plan(&profile, "clusters/test.yaml").unwrap();
+        let phase7 = &plan.phases[6];
+        assert_eq!(phase7.scenarios.len(), 2);
+        assert!(phase7.scenarios[0].name.contains("sustained"));
+        assert!(phase7.scenarios[1].name.contains("restart"));
+    }
+
+    #[test]
+    fn plan_phase8_production_readiness() {
+        let profile = test_profile();
+        let plan = generate_plan(&profile, "clusters/test.yaml").unwrap();
+        let phase8 = &plan.phases[7];
+        assert_eq!(phase8.scenarios.len(), 2);
+        assert!(phase8.scenarios[0].name.contains("cold"));
+        assert!(phase8.scenarios[1].name.contains("warm"));
+    }
+
     /// Build a test profile matching Cerebras-like parameters.
     fn test_profile() -> CustomerProfile {
         let yaml = r#"

@@ -355,4 +355,246 @@ mod tests {
         let v = p.verdict(p.predicted_min_secs * 2.0);
         assert_eq!(v, "UNDER_PROVISIONED");
     }
+
+    #[test]
+    fn verdict_unknown_zero_predicted() {
+        let p = Prediction {
+            predicted_gw_replicas: 0,
+            predicted_wh_replicas: 0,
+            predicted_min_secs: 0.0,
+            predicted_throughput_pods_per_sec: 0.0,
+            formula: "sub_90s".to_string(),
+            actual_gw_replicas: 5,
+            actual_wh_replicas: 3,
+        };
+        assert_eq!(p.verdict(42.0), "UNKNOWN");
+    }
+
+    #[test]
+    fn verdict_unknown_zero_actual() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        assert_eq!(p.verdict(0.0), "UNKNOWN");
+    }
+
+    #[test]
+    fn verdict_unknown_negative_predicted() {
+        let p = Prediction {
+            predicted_gw_replicas: 1,
+            predicted_wh_replicas: 1,
+            predicted_min_secs: -1.0,
+            predicted_throughput_pods_per_sec: 0.0,
+            formula: "sub_90s".to_string(),
+            actual_gw_replicas: 1,
+            actual_wh_replicas: 1,
+        };
+        assert_eq!(p.verdict(50.0), "UNKNOWN");
+    }
+
+    #[test]
+    fn verdict_boundary_exactly_0_90_is_on_target() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 0.90);
+        assert_eq!(v, "ON_TARGET");
+    }
+
+    #[test]
+    fn verdict_boundary_exactly_1_10_is_on_target() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 1.10);
+        assert_eq!(v, "ON_TARGET");
+    }
+
+    #[test]
+    fn verdict_boundary_just_above_1_10_is_slower() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 1.11);
+        assert_eq!(v, "SLOWER");
+    }
+
+    #[test]
+    fn verdict_boundary_exactly_1_50_is_slower() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 1.50);
+        assert_eq!(v, "SLOWER");
+    }
+
+    #[test]
+    fn verdict_boundary_just_above_1_50_is_under_provisioned() {
+        let p = Prediction::calculate(300, 2, 5, 5, 3);
+        let v = p.verdict(p.predicted_min_secs * 1.51);
+        assert_eq!(v, "UNDER_PROVISIONED");
+    }
+
+    #[test]
+    fn pod_detail_from_complete_json() {
+        let pod = serde_json::json!({
+            "metadata": {
+                "name": "test-pod-1",
+                "creationTimestamp": "2024-01-01T00:00:00Z"
+            },
+            "spec": {
+                "nodeName": "node-1"
+            },
+            "status": {
+                "phase": "Running",
+                "qosClass": "Burstable",
+                "hostIP": "10.0.1.1",
+                "podIP": "10.0.2.1",
+                "containerStatuses": [{
+                    "restartCount": 3,
+                    "state": {
+                        "running": {
+                            "startedAt": "2024-01-01T00:01:00Z"
+                        }
+                    }
+                }]
+            }
+        });
+        let detail = PodDetail::from_json(&pod, true);
+        assert_eq!(detail.name, "test-pod-1");
+        assert_eq!(detail.phase, "Running");
+        assert_eq!(detail.node, Some("node-1".to_string()));
+        assert_eq!(detail.creation_timestamp, Some("2024-01-01T00:00:00Z".to_string()));
+        assert_eq!(detail.restart_count, 3);
+        assert!(detail.state_reason.is_none());
+        assert_eq!(detail.container_started_at, Some("2024-01-01T00:01:00Z".to_string()));
+        assert_eq!(detail.qos_class, Some("Burstable".to_string()));
+        assert_eq!(detail.host_ip, Some("10.0.1.1".to_string()));
+        assert_eq!(detail.pod_ip, Some("10.0.2.1".to_string()));
+        assert!(detail.injected);
+    }
+
+    #[test]
+    fn pod_detail_from_minimal_json() {
+        let pod = serde_json::json!({});
+        let detail = PodDetail::from_json(&pod, false);
+        assert_eq!(detail.name, "");
+        assert_eq!(detail.phase, "Unknown");
+        assert!(detail.node.is_none());
+        assert!(detail.creation_timestamp.is_none());
+        assert_eq!(detail.restart_count, 0);
+        assert!(detail.state_reason.is_none());
+        assert!(detail.container_started_at.is_none());
+        assert!(detail.qos_class.is_none());
+        assert!(detail.host_ip.is_none());
+        assert!(detail.pod_ip.is_none());
+        assert!(!detail.injected);
+    }
+
+    #[test]
+    fn pod_detail_waiting_state_reason() {
+        let pod = serde_json::json!({
+            "metadata": {"name": "waiting-pod"},
+            "status": {
+                "phase": "Pending",
+                "containerStatuses": [{
+                    "restartCount": 0,
+                    "state": {
+                        "waiting": {
+                            "reason": "ImagePullBackOff"
+                        }
+                    }
+                }]
+            }
+        });
+        let detail = PodDetail::from_json(&pod, false);
+        assert_eq!(detail.phase, "Pending");
+        assert_eq!(detail.state_reason, Some("ImagePullBackOff".to_string()));
+        assert!(detail.container_started_at.is_none());
+    }
+
+    #[test]
+    fn pod_detail_empty_container_statuses() {
+        let pod = serde_json::json!({
+            "metadata": {"name": "no-containers"},
+            "status": {
+                "phase": "Pending",
+                "containerStatuses": []
+            }
+        });
+        let detail = PodDetail::from_json(&pod, true);
+        assert_eq!(detail.restart_count, 0);
+        assert!(detail.state_reason.is_none());
+    }
+
+    #[test]
+    fn injection_rate_max_u32() {
+        let rate = injection_rate(u32::MAX, u32::MAX);
+        assert!((rate - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn throughput_very_large_count() {
+        let t = throughput_per_sec(100_000, 1000);
+        assert!((t - 100_000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn prediction_zero_replicas() {
+        let p = Prediction::calculate(0, 2, 5, 5, 3);
+        assert_eq!(p.predicted_gw_replicas, 0);
+        assert!((p.predicted_min_secs - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn prediction_throughput_zero_when_min_zero() {
+        let p = Prediction::calculate(0, 0, 5, 5, 3);
+        assert!((p.predicted_throughput_pods_per_sec - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn burst_result_serialization_roundtrip() {
+        let result = BurstResult {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            replicas_requested: 100,
+            pods_running: 95,
+            pods_failed: 2,
+            pods_pending: 3,
+            pods_injected: 90,
+            injection_success_rate: 94.7,
+            time_to_first_ready_ms: 500,
+            time_to_all_ready_ms: Some(5000),
+            time_to_full_admission_ms: Some(4000),
+            time_to_50pct_running_ms: Some(2500),
+            admission_rate_pods_per_sec: 22.5,
+            gateway_throughput_pods_per_sec: 19.0,
+            duration_ms: 6000,
+            nodes: 3,
+            iteration: 1,
+            total_secrets_injected: 180,
+            peak_running: 98,
+            prediction: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: BurstResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.replicas_requested, 100);
+        assert_eq!(deserialized.pods_running, 95);
+        assert_eq!(deserialized.time_to_all_ready_ms, Some(5000));
+        assert_eq!(deserialized.total_secrets_injected, 180);
+        assert_eq!(deserialized.peak_running, 98);
+    }
+
+    #[test]
+    fn burst_result_optional_fields_default() {
+        let json = r#"{
+            "timestamp": "2024-01-01T00:00:00Z",
+            "replicas_requested": 10,
+            "pods_running": 10,
+            "pods_failed": 0,
+            "pods_pending": 0,
+            "pods_injected": 10,
+            "injection_success_rate": 100.0,
+            "time_to_first_ready_ms": 100,
+            "time_to_all_ready_ms": null,
+            "admission_rate_pods_per_sec": 10.0,
+            "gateway_throughput_pods_per_sec": 10.0,
+            "duration_ms": 1000,
+            "nodes": 1,
+            "iteration": 1
+        }"#;
+        let result: BurstResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.total_secrets_injected, 0);
+        assert_eq!(result.peak_running, 0);
+        assert!(result.prediction.is_none());
+    }
 }

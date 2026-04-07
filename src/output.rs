@@ -946,3 +946,142 @@ pub fn print_phase_breakdown(timings: &crate::types::PhaseTimings) {
         bold(&format_duration(total_secs))
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_duration_zero_seconds() {
+        assert_eq!(format_duration(0), "0s");
+    }
+
+    #[test]
+    fn format_duration_under_minute() {
+        assert_eq!(format_duration(45), "45s");
+        assert_eq!(format_duration(59), "59s");
+    }
+
+    #[test]
+    fn format_duration_exact_minute() {
+        assert_eq!(format_duration(60), "1m");
+    }
+
+    #[test]
+    fn format_duration_minutes_and_seconds() {
+        assert_eq!(format_duration(61), "1m 1s");
+        assert_eq!(format_duration(90), "1m 30s");
+        assert_eq!(format_duration(154), "2m 34s");
+    }
+
+    #[test]
+    fn format_duration_exact_hour() {
+        assert_eq!(format_duration(3600), "1h");
+    }
+
+    #[test]
+    fn format_duration_hours_and_minutes() {
+        // 3601s → h=1, m=0 (1%3600=1, 1/60=0), so "1h" (m==0 branch)
+        assert_eq!(format_duration(3601), "1h");
+        assert_eq!(format_duration(3660), "1h 1m");
+        assert_eq!(format_duration(7200), "2h");
+        assert_eq!(format_duration(7260), "2h 1m");
+    }
+
+    #[test]
+    fn format_duration_large_value() {
+        assert_eq!(format_duration(86400), "24h");
+    }
+
+    #[test]
+    fn format_ms_under_minute() {
+        assert_eq!(format_ms(500), "0.5s");
+        assert_eq!(format_ms(1500), "1.5s");
+        assert_eq!(format_ms(59999), "60.0s");
+    }
+
+    #[test]
+    fn format_ms_over_minute() {
+        assert_eq!(format_ms(60_000), "1m");
+        assert_eq!(format_ms(90_000), "1m 30s");
+        assert_eq!(format_ms(120_000), "2m");
+    }
+
+    #[test]
+    fn format_ms_zero() {
+        assert_eq!(format_ms(0), "0.0s");
+    }
+
+    #[test]
+    fn build_summary_row_pass() {
+        let row = build_summary_row("test-scenario", 100, Some(100), Some(5000), Some(100.0), false);
+        assert_eq!(row.scenario, "test-scenario");
+        assert_eq!(row.pods, "100/100");
+        assert_eq!(row.time, "5.0s");
+        assert_eq!(row.injection, "100.0%");
+        assert_eq!(row.status, "PASS");
+    }
+
+    #[test]
+    fn build_summary_row_fail() {
+        let row = build_summary_row("failed-scenario", 100, Some(50), Some(30000), Some(50.0), true);
+        assert_eq!(row.status, "FAIL");
+        assert_eq!(row.pods, "50/100");
+        assert_eq!(row.injection, "50.0%");
+    }
+
+    #[test]
+    fn build_summary_row_none_values() {
+        let row = build_summary_row("no-data", 100, None, None, None, true);
+        assert_eq!(row.pods, "-");
+        assert_eq!(row.time, "-");
+        assert_eq!(row.injection, "-");
+        assert_eq!(row.status, "FAIL");
+    }
+
+    #[test]
+    fn build_summary_row_time_over_minute() {
+        let row = build_summary_row("slow", 1000, Some(1000), Some(120_000), Some(99.0), false);
+        assert_eq!(row.time, "2m");
+    }
+
+    #[test]
+    fn strip_ansi_len_plain_text() {
+        assert_eq!(strip_ansi_len("hello"), 5);
+    }
+
+    #[test]
+    fn strip_ansi_len_with_ansi() {
+        assert_eq!(strip_ansi_len("\x1b[1mhello\x1b[0m"), 5);
+        assert_eq!(strip_ansi_len("\x1b[32mOK\x1b[0m"), 2);
+    }
+
+    #[test]
+    fn strip_ansi_len_nested_ansi() {
+        assert_eq!(strip_ansi_len("\x1b[1;32mtest\x1b[0m"), 4);
+    }
+
+    #[test]
+    fn strip_ansi_len_empty() {
+        assert_eq!(strip_ansi_len(""), 0);
+    }
+
+    #[test]
+    fn strip_ansi_len_only_ansi() {
+        assert_eq!(strip_ansi_len("\x1b[1m\x1b[0m"), 0);
+    }
+
+    #[test]
+    fn write_to_appends() {
+        let mut buf = String::from("hello ");
+        write_to(&mut buf, "world");
+        assert_eq!(buf, "hello world");
+    }
+
+    #[test]
+    fn write_to_empty() {
+        let mut buf = String::new();
+        write_to(&mut buf, "");
+        assert_eq!(buf, "");
+    }
+}

@@ -129,3 +129,234 @@ impl CustomerProfile {
         total_requests as f64 / aggregate_qps as f64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_profile_yaml() -> &'static str {
+        r#"
+customer:
+  name: test-customer
+  ticket: TEST-001
+environment:
+  nodes: 10
+workload:
+  target_pods: 100
+  test_max_pods: 1000
+  secrets_per_pod: 2
+akeyless:
+  qps: 5
+"#
+    }
+
+    fn parse_profile(yaml: &str) -> CustomerProfile {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn validate_passes_valid_profile() {
+        let p = parse_profile(valid_profile_yaml());
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_target_pods() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 10
+workload:
+  target_pods: 0
+  test_max_pods: 100
+akeyless:
+  qps: 5
+"#;
+        let p = parse_profile(yaml);
+        let err = p.validate().unwrap_err();
+        assert!(err.to_string().contains("target_pods must be > 0"));
+    }
+
+    #[test]
+    fn validate_rejects_test_max_less_than_target() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 10
+workload:
+  target_pods: 200
+  test_max_pods: 100
+akeyless:
+  qps: 5
+"#;
+        let p = parse_profile(yaml);
+        let err = p.validate().unwrap_err();
+        assert!(err.to_string().contains("test_max_pods must be >= target_pods"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_qps() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 10
+workload:
+  target_pods: 100
+  test_max_pods: 1000
+akeyless:
+  qps: 0
+"#;
+        let p = parse_profile(yaml);
+        let err = p.validate().unwrap_err();
+        assert!(err.to_string().contains("qps must be > 0"));
+    }
+
+    #[test]
+    fn validate_passes_when_test_max_equals_target() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 10
+workload:
+  target_pods: 100
+  test_max_pods: 100
+akeyless:
+  qps: 5
+"#;
+        let p = parse_profile(yaml);
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn theoretical_minimum_secs_basic() {
+        let p = parse_profile(valid_profile_yaml());
+        let t = p.theoretical_minimum_secs(6);
+        // total_requests = 1000 * 2 = 2000, aggregate_qps = 6 * 5 = 30
+        // 2000 / 30 = 66.667
+        assert!((t - 66.667).abs() < 0.01);
+    }
+
+    #[test]
+    fn theoretical_minimum_secs_single_gw() {
+        let p = parse_profile(valid_profile_yaml());
+        let t = p.theoretical_minimum_secs(1);
+        // 2000 / 5 = 400
+        assert!((t - 400.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn serde_defaults_applied() {
+        let yaml = r#"
+customer:
+  name: minimal
+environment:
+  nodes: 5
+workload:
+  target_pods: 50
+akeyless: {}
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.workload.test_max_pods, 1000);
+        assert_eq!(p.workload.secrets_per_pod, 2);
+        assert_eq!(p.workload.init_containers, 1);
+        assert_eq!(p.akeyless.auth_method, "k8s");
+        assert_eq!(p.akeyless.gateway_memory, "512Mi");
+        assert_eq!(p.akeyless.webhook_timeout_secs, 30);
+        assert_eq!(p.akeyless.qps, 5);
+        assert_eq!(p.akeyless.burst_qps, 10);
+        assert!(p.constraints.is_empty());
+    }
+
+    #[test]
+    fn workload_kind_default_is_deployment() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 1
+workload:
+  target_pods: 10
+akeyless: {}
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(p.workload.workload_kind, WorkloadKind::Deployment));
+    }
+
+    #[test]
+    fn workload_kind_job_parses() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 1
+workload:
+  target_pods: 10
+  workload_kind: job
+akeyless: {}
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(p.workload.workload_kind, WorkloadKind::Job));
+    }
+
+    #[test]
+    fn gateway_node_mode_default_is_shared() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 1
+workload:
+  target_pods: 10
+akeyless: {}
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(p.akeyless.gateway_nodes, GatewayNodeMode::Shared));
+    }
+
+    #[test]
+    fn gateway_node_mode_dedicated_parses() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 1
+workload:
+  target_pods: 10
+akeyless:
+  gateway_nodes: dedicated
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(p.akeyless.gateway_nodes, GatewayNodeMode::Dedicated));
+    }
+
+    #[test]
+    fn optional_fields_absent() {
+        let yaml = r#"
+customer:
+  name: test
+environment:
+  nodes: 1
+workload:
+  target_pods: 10
+akeyless: {}
+"#;
+        let p: CustomerProfile = serde_yaml::from_str(yaml).unwrap();
+        assert!(p.customer.ticket.is_none());
+        assert!(p.customer.contacts.is_empty());
+        assert!(p.environment.node_type.is_none());
+        assert!(p.environment.node_memory_gb.is_none());
+        assert!(p.workload.restart_policy.is_none());
+        assert!(p.workload.pod_memory_gb.is_none());
+        assert!(p.akeyless.gateway_headroom_pct.is_none());
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_error() {
+        let err = CustomerProfile::load("/nonexistent/path/profile.yaml").unwrap_err();
+        assert!(err.to_string().contains("Failed to read profile"));
+    }
+}

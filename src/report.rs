@@ -376,11 +376,224 @@ pub fn export_json(report: &MatrixReport, output_dir: &str) -> anyhow::Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{BurstResult, MatrixReport, PhaseTimings, ScenarioResult, WarmupTimings};
 
     #[test]
     fn test_base64_encode() {
         assert_eq!(base64_encode("hello"), "aGVsbG8=");
         assert_eq!(base64_encode("user:token"), "dXNlcjp0b2tlbg==");
         assert_eq!(base64_encode(""), "");
+    }
+
+    #[test]
+    fn base64_encode_single_char() {
+        assert_eq!(base64_encode("a"), "YQ==");
+    }
+
+    #[test]
+    fn base64_encode_two_chars() {
+        assert_eq!(base64_encode("ab"), "YWI=");
+    }
+
+    #[test]
+    fn base64_encode_three_chars() {
+        assert_eq!(base64_encode("abc"), "YWJj");
+    }
+
+    #[test]
+    fn base64_encode_special_chars() {
+        assert_eq!(base64_encode("user@example.com:s3cr3t!"), "dXNlckBleGFtcGxlLmNvbTpzM2NyM3Qh");
+    }
+
+    fn make_burst_result(running: u32, replicas: u32) -> BurstResult {
+        BurstResult {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            replicas_requested: replicas,
+            pods_running: running,
+            pods_failed: 0,
+            pods_pending: 0,
+            pods_injected: running,
+            injection_success_rate: 100.0,
+            time_to_first_ready_ms: 500,
+            time_to_all_ready_ms: Some(5000),
+            time_to_full_admission_ms: Some(4000),
+            time_to_50pct_running_ms: Some(2500),
+            admission_rate_pods_per_sec: 20.0,
+            gateway_throughput_pods_per_sec: 18.0,
+            duration_ms: 6000,
+            nodes: 3,
+            iteration: 1,
+            total_secrets_injected: running * 2,
+            peak_running: running,
+            prediction: None,
+        }
+    }
+
+    fn make_report(scenarios: Vec<ScenarioResult>) -> MatrixReport {
+        MatrixReport {
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            scenarios,
+        }
+    }
+
+    fn default_config() -> Config {
+        serde_json::from_str("{}").unwrap()
+    }
+
+    #[test]
+    fn generate_report_all_pass() {
+        let report = make_report(vec![
+            ScenarioResult {
+                name: "test-100".to_string(),
+                replicas: 100,
+                gateway_replicas: 5,
+                webhook_replicas: 3,
+                verify: None,
+                burst: Some(make_burst_result(100, 100)),
+                phase_timings: None,
+                error: None,
+            },
+        ]);
+        let config = default_config();
+        let (title, html) = generate_report(&report, &config);
+
+        assert!(title.contains("Burst Test Report"));
+        assert!(html.contains("PASS"));
+        assert!(!html.contains("FAIL"));
+        assert!(html.contains("test-100"));
+        assert!(html.contains("100.0%"));
+    }
+
+    #[test]
+    fn generate_report_with_failure() {
+        let report = make_report(vec![
+            ScenarioResult {
+                name: "fail-scenario".to_string(),
+                replicas: 500,
+                gateway_replicas: 3,
+                webhook_replicas: 3,
+                verify: None,
+                burst: None,
+                phase_timings: None,
+                error: Some("Gate 3 FAILED: infrastructure not ready".to_string()),
+            },
+        ]);
+        let config = default_config();
+        let (_, html) = generate_report(&report, &config);
+
+        assert!(html.contains("FAIL"));
+        assert!(html.contains("fail-scenario"));
+        assert!(html.contains("Gate 3 FAILED"));
+    }
+
+    #[test]
+    fn generate_report_with_phase_timings() {
+        let report = make_report(vec![
+            ScenarioResult {
+                name: "timed".to_string(),
+                replicas: 100,
+                gateway_replicas: 5,
+                webhook_replicas: 3,
+                verify: None,
+                burst: Some(make_burst_result(100, 100)),
+                phase_timings: Some(PhaseTimings {
+                    reset_ms: 5000,
+                    warmup_ms: 120_000,
+                    warmup_detail: WarmupTimings {
+                        nodes_ms: 60_000,
+                        images_ms: 30_000,
+                        ipamd_warmup_ms: 0,
+                        gateway_ms: 15_000,
+                        webhook_ms: 10_000,
+                        gates_ms: 5000,
+                        patches_ms: 0,
+                        total_ms: 120_000,
+                    },
+                    execution_ms: 8000,
+                }),
+                error: None,
+            },
+        ]);
+        let config = default_config();
+        let (_, html) = generate_report(&report, &config);
+
+        assert!(html.contains("Phase Timings"));
+        assert!(html.contains("5.0s")); // reset
+        assert!(html.contains("120.0s")); // warmup
+    }
+
+    #[test]
+    fn generate_report_without_burst_shows_dashes() {
+        let report = make_report(vec![
+            ScenarioResult {
+                name: "no-burst".to_string(),
+                replicas: 100,
+                gateway_replicas: 1,
+                webhook_replicas: 1,
+                verify: None,
+                burst: None,
+                phase_timings: None,
+                error: None,
+            },
+        ]);
+        let config = default_config();
+        let (_, html) = generate_report(&report, &config);
+
+        assert!(html.contains("<td>-</td>"));
+    }
+
+    #[test]
+    fn generate_report_includes_config_details() {
+        let config = default_config();
+        let report = make_report(vec![]);
+        let (_, html) = generate_report(&report, &config);
+
+        assert!(html.contains("scale-test"));
+        assert!(html.contains("nginx-burst"));
+        assert!(html.contains("Env"));
+    }
+
+    #[test]
+    fn generate_report_includes_raw_json() {
+        let report = make_report(vec![]);
+        let config = default_config();
+        let (_, html) = generate_report(&report, &config);
+
+        assert!(html.contains("CDATA"));
+        assert!(html.contains("Raw Data"));
+    }
+
+    #[test]
+    fn export_json_creates_file() {
+        let dir = std::env::temp_dir().join("burst-forge-test-export");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let report = make_report(vec![]);
+        let path = export_json(&report, &dir.to_string_lossy()).unwrap();
+
+        assert!(std::path::Path::new(&path).exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: MatrixReport = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.timestamp, "2024-01-01T00:00:00Z");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_json_sanitizes_timestamp() {
+        let dir = std::env::temp_dir().join("burst-forge-test-sanitize");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let report = MatrixReport {
+            timestamp: "2024-01-01T12:30:45+05:30".to_string(),
+            scenarios: vec![],
+        };
+        let path = export_json(&report, &dir.to_string_lossy()).unwrap();
+
+        assert!(path.contains("12-30-45p05-30"));
+        assert!(!path.contains(':'));
+        assert!(!path.contains('+'));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
