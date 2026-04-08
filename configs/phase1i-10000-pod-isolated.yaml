@@ -98,10 +98,8 @@ scenarios:
     replicas: 10000
     gateway_replicas: 30
     webhook_replicas: 16
-    gateway_memory_limit: "1536Mi"
 
   - name: "gw60-wh16-10000-isolated"
     replicas: 10000
     gateway_replicas: 60
     webhook_replicas: 16
-    gateway_memory_limit: "1536Mi"

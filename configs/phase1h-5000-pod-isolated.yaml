@@ -92,10 +92,8 @@ scenarios:
     replicas: 5000
     gateway_replicas: 16
     webhook_replicas: 12
-    gateway_memory_limit: "1536Mi"
 
   - name: "gw30-wh16-5000-isolated"
     replicas: 5000
     gateway_replicas: 30
     webhook_replicas: 16
-    gateway_memory_limit: "1536Mi"

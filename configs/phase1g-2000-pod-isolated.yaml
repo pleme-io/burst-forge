@@ -93,15 +93,14 @@ warmup_daemonset:
 vector_endpoint: "http://localhost:9500"
 scenarios:
   # gw12-wh12: formula floor for 2000 pods. Phase 1f sweet spot at 1500.
+  # Memory is set by the HelmRelease (1536Mi) — no per-scenario override needed.
   - name: "gw12-wh12-2000-isolated"
     replicas: 2000
     gateway_replicas: 12
     webhook_replicas: 12
-    gateway_memory_limit: "1536Mi"
 
   # gw16-wh12: headroom. Phase 1f hit 87.9s all-ready at 1500.
   - name: "gw16-wh12-2000-isolated"
     replicas: 2000
     gateway_replicas: 16
     webhook_replicas: 12
-    gateway_memory_limit: "1536Mi"

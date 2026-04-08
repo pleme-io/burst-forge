@@ -606,7 +606,7 @@ fn default_injection_env_prefix() -> String { "AKEYLESS_".to_string() }
 fn default_init_container_name() -> String { "customer-init".to_string() }
 fn default_workload_container_name() -> String { "nginx".to_string() }
 fn default_webhook_container_name() -> String { "akeyless-secrets-injection".to_string() }
-fn default_gateway_container_name() -> String { "api-gateway".to_string() }
+fn default_gateway_container_name() -> String { "akeyless-gateway".to_string() }
 fn default_secret_path_prefix() -> String { "/pleme/test/hello".to_string() }
 fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 fn default_image_cache_namespace() -> String { "image-cache".to_string() }
