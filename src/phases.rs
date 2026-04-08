@@ -298,11 +298,14 @@ pub fn run_phase_2_warmup(
                 output::print_action(&format!(
                     "  Gateway wave {wave}: {current} -> {next} / {target} replicas..."
                 ));
-                kubectl.run(&[
-                    "-n", &config.injection_namespace, "scale", "deployment",
-                    &config.gateway_deployment,
-                    &format!("--replicas={next}"),
-                ])?;
+                // Patch HelmRelease values (not deployment directly) so Flux
+                // doesn't revert the replica count during reconciliation.
+                kubectl.patch_helmrelease_replicas(
+                    &config.injection_namespace,
+                    &config.gateway_release,
+                    next,
+                    &config.gateway_replica_patch,
+                )?;
 
                 let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
                 if let Err(e) = kubectl.run(&[
@@ -320,11 +323,12 @@ pub fn run_phase_2_warmup(
             output::print_action(&format!(
                 "  Gateway -> {target} replicas..."
             ));
-            kubectl.run(&[
-                "-n", &config.injection_namespace, "scale", "deployment",
-                &config.gateway_deployment,
-                &format!("--replicas={target}"),
-            ])?;
+            kubectl.patch_helmrelease_replicas(
+                &config.injection_namespace,
+                &config.gateway_release,
+                target,
+                &config.gateway_replica_patch,
+            )?;
 
             let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
             let _ = kubectl.run(&[
@@ -361,6 +365,7 @@ pub fn run_phase_2_warmup(
         output::print_action(&format!(
             "  Webhook -> {} replicas...", scenario.webhook_replicas
         ));
+        // WH HelmRelease is suspended (2a-pre), so kubectl scale works.
         kubectl.run(&[
             "-n", &config.injection_namespace, "scale", "deployment",
             &config.webhook_deployment,
