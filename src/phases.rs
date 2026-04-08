@@ -289,6 +289,18 @@ pub fn run_phase_2_warmup(
         let target = scenario.gateway_replicas;
         let batch = config.gateway_batch_size;
 
+        // Suspend the GW HelmRelease so Flux doesn't revert our replica
+        // changes. The kustomize-controller re-applies the HelmRelease
+        // from git periodically, overwriting merge-patches. Suspending
+        // the HelmRelease prevents the helm-controller from reconciling
+        // back to the git-defined value.
+        output::print_action("  Suspending gateway HelmRelease...");
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch",
+            "helmrelease.helm.toolkit.fluxcd.io", &config.gateway_release,
+            "--type=merge", "-p", r#"{"spec":{"suspend":true}}"#,
+        ]);
+
         if batch > 0 && target > batch {
             let mut current = 0u32;
             let mut wave = 0u32;
@@ -298,14 +310,11 @@ pub fn run_phase_2_warmup(
                 output::print_action(&format!(
                     "  Gateway wave {wave}: {current} -> {next} / {target} replicas..."
                 ));
-                // Patch HelmRelease values (not deployment directly) so Flux
-                // doesn't revert the replica count during reconciliation.
-                kubectl.patch_helmrelease_replicas(
-                    &config.injection_namespace,
-                    &config.gateway_release,
-                    next,
-                    &config.gateway_replica_patch,
-                )?;
+                kubectl.run(&[
+                    "-n", &config.injection_namespace, "scale", "deployment",
+                    &config.gateway_deployment,
+                    &format!("--replicas={next}"),
+                ])?;
 
                 let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
                 if let Err(e) = kubectl.run(&[
@@ -323,12 +332,11 @@ pub fn run_phase_2_warmup(
             output::print_action(&format!(
                 "  Gateway -> {target} replicas..."
             ));
-            kubectl.patch_helmrelease_replicas(
-                &config.injection_namespace,
-                &config.gateway_release,
-                target,
-                &config.gateway_replica_patch,
-            )?;
+            kubectl.run(&[
+                "-n", &config.injection_namespace, "scale", "deployment",
+                &config.gateway_deployment,
+                &format!("--replicas={target}"),
+            ])?;
 
             let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
             let _ = kubectl.run(&[

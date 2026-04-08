@@ -172,23 +172,18 @@ pub fn run_matrix(
             ]);
         }
 
-        // Legacy cleanup path (in case old code path is hit)
-        if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.injection_namespace,
-            &config.gateway_release,
-            1,
-            &config.gateway_replica_patch,
-        ) {
-            output::print_warning(&format!("Failed to reset gateway replicas: {e}"));
-        }
-        if let Err(e) = kubectl.patch_helmrelease_replicas(
-            &config.injection_namespace,
-            &config.webhook_release,
-            1,
-            &config.webhook_replica_patch,
-        ) {
-            output::print_warning(&format!("Failed to reset webhook replicas: {e}"));
-        }
+        // Resume GW + WH HelmReleases (suspended during scaling).
+        // Flux will reconcile back to the git-defined replica count.
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch",
+            "helmrelease.helm.toolkit.fluxcd.io", &config.gateway_release,
+            "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+        ]);
+        let _ = kubectl.run(&[
+            "-n", &config.injection_namespace, "patch",
+            "helmrelease.helm.toolkit.fluxcd.io", &config.webhook_release,
+            "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+        ]);
     }
 
     // Scale burst node group back to 0 — always attempt
