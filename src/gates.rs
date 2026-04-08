@@ -384,7 +384,10 @@ pub fn check_starting_line_gate(
         &config.webhook_deployment,
     )?;
 
-    if gw_ready < expected_gw {
+    // Pass at 90% GW readiness — one slow cold-start pod shouldn't block.
+    #[allow(clippy::cast_precision_loss)]
+    let gw_ratio = if expected_gw > 0 { gw_ready as f64 / expected_gw as f64 } else { 1.0 };
+    if gw_ratio < 0.9 {
         return Ok(GateResult::fail(
             "[Gate 4]",
             "Starting Line".to_string(),
