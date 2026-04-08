@@ -350,6 +350,18 @@ pub struct Config {
     #[serde(default = "default_webhook_release")]
     pub webhook_release: String,
 
+    /// JSON merge-patch template for gateway HelmRelease replica count.
+    /// Use `{replicas}` as placeholder. Default for akeyless-gateway chart:
+    /// `{"spec":{"values":{"gateway":{"deployment":{"replicaCount":{replicas}}}}}}`
+    /// Old akeyless-api-gateway chart used:
+    /// `{"spec":{"values":{"replicaCount":{replicas}}}}`
+    #[serde(default = "default_gateway_replica_patch")]
+    pub gateway_replica_patch: String,
+
+    /// JSON merge-patch template for webhook HelmRelease replica count.
+    #[serde(default = "default_webhook_replica_patch")]
+    pub webhook_replica_patch: String,
+
     /// Deployment name for the gateway (used by `kubectl scale`).
     #[serde(default)]
     pub gateway_deployment: String,
@@ -584,6 +596,12 @@ fn default_gateway_label() -> String { String::new() }
 fn default_webhook_label() -> String { String::new() }
 fn default_gateway_release() -> String { String::new() }
 fn default_webhook_release() -> String { String::new() }
+fn default_gateway_replica_patch() -> String {
+    r#"{"spec":{"values":{"gateway":{"deployment":{"replicaCount":{replicas}}}}}}"#.to_string()
+}
+fn default_webhook_replica_patch() -> String {
+    r#"{"spec":{"values":{"replicaCount":{replicas}}}}"#.to_string()
+}
 fn default_injection_env_prefix() -> String { "AKEYLESS_".to_string() }
 fn default_init_container_name() -> String { "customer-init".to_string() }
 fn default_workload_container_name() -> String { "nginx".to_string() }

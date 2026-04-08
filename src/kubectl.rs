@@ -77,7 +77,8 @@ impl KubeCtl {
 
     /// Patch a `HelmRelease` to set the desired replica count via values override.
     ///
-    /// This patches the `HelmRelease` spec to set `spec.values.replicaCount`.
+    /// The `patch_template` is a JSON merge-patch string with `{replicas}` placeholder.
+    /// e.g. `{"spec":{"values":{"gateway":{"deployment":{"replicaCount":{replicas}}}}}}`
     ///
     /// # Errors
     ///
@@ -87,10 +88,9 @@ impl KubeCtl {
         ns: &str,
         name: &str,
         replicas: u32,
+        patch_template: &str,
     ) -> anyhow::Result<()> {
-        let patch = format!(
-            r#"{{"spec":{{"values":{{"replicaCount":{replicas}}}}}}}"#,
-        );
+        let patch = patch_template.replace("{replicas}", &replicas.to_string());
         self.run(&[
             "-n",
             ns,

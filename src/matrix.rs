@@ -177,6 +177,7 @@ pub fn run_matrix(
             &config.injection_namespace,
             &config.gateway_release,
             1,
+            &config.gateway_replica_patch,
         ) {
             output::print_warning(&format!("Failed to reset gateway replicas: {e}"));
         }
@@ -184,6 +185,7 @@ pub fn run_matrix(
             &config.injection_namespace,
             &config.webhook_release,
             1,
+            &config.webhook_replica_patch,
         ) {
             output::print_warning(&format!("Failed to reset webhook replicas: {e}"));
         }
