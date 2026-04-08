@@ -25,6 +25,7 @@ drain_timeout_secs: 180
 drain_poll_interval_secs: 5
 ipamd_warmup_secs: 60
 suspend_kustomizations:
+  - infrastructure-akeyless
   - scale-test-workloads
 injection_mode: env
 injection_env_prefix: "AKEYLESS_"
