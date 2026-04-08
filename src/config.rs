@@ -414,6 +414,21 @@ pub struct Config {
     #[serde(default)]
     pub gateway_batch_size: u32,
 
+    /// Maximum number of workload pods to create per burst wave.
+    /// When > 0, Phase 3 scales the deployment in waves of this size,
+    /// waiting briefly between waves for the webhook to process admission.
+    /// This avoids webhook timeout at 10000+ pods — the webhook can only
+    /// handle ~160-320 pod creates/sec, so 10000 simultaneous creates
+    /// exceed the 30s timeout. Waves of 2500 stay within limits.
+    /// Default: 0 (no batching — all pods at once, legacy behavior).
+    #[serde(default)]
+    pub burst_batch_size: u32,
+
+    /// Seconds to wait between burst batches for webhook to drain.
+    /// Default: 5.
+    #[serde(default = "default_burst_batch_wait")]
+    pub burst_batch_wait_secs: u64,
+
     /// Secrets per pod for injection counting and prediction calculation.
     /// Default: 2.
     #[serde(default = "default_secrets_per_pod")]
@@ -614,6 +629,7 @@ fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_strin
 fn default_flux_namespace() -> String { "flux-system".to_string() }
 fn default_qps() -> u32 { 5 }
 fn default_secrets_per_pod() -> u32 { 2 }
+fn default_burst_batch_wait() -> u64 { 5 }
 fn default_warmup_timeout() -> u64 { 300 }
 fn default_grace_period() -> u64 { 30 }
 

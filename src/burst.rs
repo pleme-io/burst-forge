@@ -56,17 +56,40 @@ pub fn run_burst(
     output::print_action("Verifying starting line...");
     drain::verify_starting_line(kubectl, config, expected_gw, expected_wh)?;
 
-    // BURST: Scale to N
+    // BURST: Scale to N (optionally in batches to avoid webhook timeout)
     let burst_start = Instant::now();
-    output::print_burst_start(replicas);
-    kubectl.run(&[
-        "-n",
-        &config.namespace,
-        "scale",
-        "deployment",
-        &config.deployment,
-        &format!("--replicas={replicas}"),
-    ])?;
+    let batch = config.burst_batch_size;
+
+    if batch > 0 && replicas > batch {
+        output::print_burst_start(replicas);
+        let mut current = 0u32;
+        let mut wave = 0u32;
+        while current < replicas {
+            let next = (current + batch).min(replicas);
+            wave += 1;
+            output::print_action(&format!(
+                "  Burst wave {wave}: {current} -> {next} / {replicas} pods..."
+            ));
+            kubectl.run(&[
+                "-n", &config.namespace, "scale", "deployment",
+                &config.deployment, &format!("--replicas={next}"),
+            ])?;
+            current = next;
+            if current < replicas {
+                std::thread::sleep(Duration::from_secs(config.burst_batch_wait_secs));
+            }
+        }
+    } else {
+        output::print_burst_start(replicas);
+        kubectl.run(&[
+            "-n",
+            &config.namespace,
+            "scale",
+            "deployment",
+            &config.deployment,
+            &format!("--replicas={replicas}"),
+        ])?;
+    }
 
     // Poll pod status until timeout
     let mut first_ready_time: Option<u64> = None;

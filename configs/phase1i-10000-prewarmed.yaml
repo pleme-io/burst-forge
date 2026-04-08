@@ -30,6 +30,11 @@ deployment: nginx-burst
 qps: 5
 gateway_batch_size: 5
 secrets_per_pod: 2
+# Burst pod creation in waves of 2500 to stay within webhook admission
+# capacity. At 16 WH replicas × ~10 calls/sec × 30s timeout = 4800 pods
+# max per wave. 2500 gives ~50% headroom.
+burst_batch_size: 2500
+burst_batch_wait_secs: 5
 timeout_secs: 1800
 poll_interval_secs: 5
 cooldown_secs: 60
