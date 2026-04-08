@@ -54,6 +54,16 @@ pub fn run_matrix(
 
     output::print_phase(&format!("Scaling Matrix: {} scenarios", scenarios.len()));
 
+    // Pause cluster-autoscaler to prevent node drain during experiments.
+    // Autoscaler sees idle burst nodes between scenarios and drains them,
+    // causing the next scenario to fail (nodes not found). Also prevents
+    // mid-burst node termination that leaves pods Pending.
+    output::print_action("Pausing cluster-autoscaler...");
+    let _ = kubectl.run(&[
+        "-n", "kube-system", "scale", "deployment",
+        "cluster-autoscaler-aws-cluster-autoscaler", "--replicas=0",
+    ]);
+
     // Scale worker node group to desired count (if configured)
     // Errors here don't skip cleanup — we proceed to the scenario loop
     // which will fail on its own, then cleanup runs.
@@ -185,6 +195,13 @@ pub fn run_matrix(
             "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
         ]);
     }
+
+    // Resume cluster-autoscaler
+    output::print_action("Resuming cluster-autoscaler...");
+    let _ = kubectl.run(&[
+        "-n", "kube-system", "scale", "deployment",
+        "cluster-autoscaler-aws-cluster-autoscaler", "--replicas=1",
+    ]);
 
     // Scale burst node group back to 0 — always attempt
     if let Some(ng) = &config.node_group {
