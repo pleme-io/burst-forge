@@ -30,6 +30,7 @@ drain_poll_interval_secs: 5
 ipamd_warmup_secs: 60
 suspend_kustomizations:
   - scale-test-workloads
+  - infrastructure-akeyless
 injection_mode: env
 injection_env_prefix: "AKEYLESS_"
 injection_namespace: akeyless-system
