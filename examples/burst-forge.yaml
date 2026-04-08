@@ -47,11 +47,11 @@ flux:
 
 # Injection infrastructure — configure for your injection system
 injection_namespace: akeyless-system
-gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+gateway_label: "app.kubernetes.io/name=akeyless-gateway"
 webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection
-gateway_deployment: akeyless-gateway-akeyless-api-gateway
+gateway_deployment: unified-akeyless-gateway
 webhook_deployment: akeyless-secrets-injection
 
 # Injection detection mode: "sidecar" (2+ containers) or "env" (env var prefix match)

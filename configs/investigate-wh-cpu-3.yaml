@@ -1,6 +1,6 @@
 # Investigation: CPU observation at WH=3
 # Run with: burst-forge flow investigate-wh-cpu-3
-# Simultaneously run: kubectl top pods -n akeyless-system --sort-by=cpu -l 'app.kubernetes.io/name=akeyless-api-gateway or app=akeyless-secrets-injection' every 5s
+# Simultaneously run: kubectl top pods -n akeyless-system --sort-by=cpu -l 'app.kubernetes.io/name=akeyless-gateway or app=akeyless-secrets-injection' every 5s
 
 kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
@@ -18,9 +18,9 @@ suspend_kustomizations:
 injection_mode: env
 injection_env_prefix: "AKEYLESS_"
 injection_namespace: akeyless-system
-gateway_deployment: akeyless-gateway-akeyless-api-gateway
+gateway_deployment: unified-akeyless-gateway
 webhook_deployment: akeyless-secrets-injection
-gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+gateway_label: "app.kubernetes.io/name=akeyless-gateway"
 webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection

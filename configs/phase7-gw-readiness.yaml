@@ -6,7 +6,7 @@
 # Run this config twice:
 #   1. With current readiness (30s) — baseline
 #   2. After patching readiness to 15s in the HelmRelease (or via kubectl):
-#      kubectl -n akeyless-system patch deployment akeyless-gateway-akeyless-api-gateway \
+#      kubectl -n akeyless-system patch deployment unified-akeyless-gateway \
 #        --type=json -p='[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds","value":15}]'
 
 kubeconfig: "~/.kube/scale-test.yaml"
@@ -25,9 +25,9 @@ suspend_kustomizations:
 injection_mode: env
 injection_env_prefix: "AKEYLESS_"
 injection_namespace: akeyless-system
-gateway_deployment: akeyless-gateway-akeyless-api-gateway
+gateway_deployment: unified-akeyless-gateway
 webhook_deployment: akeyless-secrets-injection
-gateway_label: "app.kubernetes.io/name=akeyless-api-gateway"
+gateway_label: "app.kubernetes.io/name=akeyless-gateway"
 webhook_label: "app=akeyless-secrets-injection"
 gateway_release: akeyless-gateway
 webhook_release: akeyless-secrets-injection

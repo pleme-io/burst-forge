@@ -11,7 +11,7 @@ kubectl -n observability get pods
 # Expect: vector, shinryu-mcp, grafana, victoriametrics, loki all Running
 
 # 3. Verify GW/WH metrics are being scraped
-kubectl -n observability exec deploy/vector -- curl -s http://akeyless-gateway-akeyless-api-gateway.akeyless-system.svc:28888/metrics | head -5
+kubectl -n observability exec deploy/vector -- curl -s http://unified-akeyless-gateway.akeyless-system.svc:28888/metrics | head -5
 
 # 4. Verify Shinryu has data
 shinryu-mcp --analytics-path /tmp/test --sql "SELECT 1"

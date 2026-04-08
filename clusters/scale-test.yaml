@@ -34,8 +34,8 @@ injection:
   env_prefix: "AKEYLESS_"
   namespace: akeyless-system
   gateway:
-    deployment: akeyless-gateway-akeyless-api-gateway
-    label: "app.kubernetes.io/name=akeyless-api-gateway"
+    deployment: unified-akeyless-gateway
+    label: "app.kubernetes.io/name=akeyless-gateway"
     release: akeyless-gateway
   webhook:
     deployment: akeyless-secrets-injection
