@@ -132,7 +132,7 @@ Pre-built DataFusion SQL for post-experiment analysis:
 ### 8-Phase Experiment Configs (`configs/phase{1-8}*.yaml`)
 Full experiment suite for Cerebras optimization.
 
-### Scaling Formulas (validated from 40+ experiments)
+### Scaling Formulas (validated from 50+ experiments)
 | Formula | Expression |
 |---------|-----------|
 | GW for sub-90s | `ceil(pods * secrets / (qps * 67))` |
@@ -141,6 +141,51 @@ Full experiment suite for Cerebras optimization.
 | WH optimal (≥500) | 5 |
 | GW memory min | 768Mi (WH≤5), 1Gi (WH>5) |
 | Theoretical floor | `(pods * secrets) / (gw * qps)` seconds |
+
+### Validated GW Probe + Scaling Optimization (2026-04-08/09)
+
+Four experiments at 10000 pods validated the optimal GW scaling config:
+
+| Experiment | What | GW Scaling | Total Warmup | Result |
+|------------|------|-----------|-------------|--------|
+| Baseline | Chart defaults (60s delay, 5 batch) | 30 min (6 waves) | 50 min | Baseline |
+| A+B+C | Probes + batch 10 + stabilize 30s | **6 min (3 waves)** | **23.5 min** | **Best** |
+| D | Single-wave (all 30 at once) | 12.8 min (3 restarts) | 20.6 min | Viable |
+
+**Recommended probe config** (validated, should be Helm chart default):
+```yaml
+startupProbe:
+  httpGet: {path: /health, port: 8080}
+  initialDelaySeconds: 15    # was 60 — GW serves at ~20s
+  periodSeconds: 5           # was 10
+  failureThreshold: 12       # 60s max startup window
+
+readinessProbe:
+  httpGet: {path: /health, port: 8080}
+  initialDelaySeconds: 0     # startupProbe handles slow starts
+  periodSeconds: 5
+  timeoutSeconds: 5
+```
+
+**Recommended burst-forge config:**
+```yaml
+gateway_batch_size: 10              # 3 waves for 30 pods (was 5 → 6 waves)
+post_scale_stabilize_secs: 30      # was 180 — probes ensure readiness
+burst_batch_size: 2500              # webhook admission capacity headroom
+```
+
+**Why batched (A+B+C) beats single-wave (D):**
+- 3/30 pods fail startup probe at 60s when all start simultaneously
+- ClusterCache leader takes ~20s; 29 followers compete for Redis reads
+- Batched waves give each cohort exclusive CPU + Redis bandwidth
+
+### Requirements by Scale (validated)
+| Pods | GW | WH | Burst Nodes | GW Nodes | Subnets |
+|------|----|----|-------------|----------|---------|
+| 1000 | 12 | 7 | 18 | 3 | /20 |
+| 2000 | 12 | 12 | 36 | 3 | /18 |
+| 5000 | 21 | 16 | 87 | 6 | /18 |
+| 10000 | 30 | 16 | 174 | 8 | /18 |
 
 ## Key Config Fields
 
