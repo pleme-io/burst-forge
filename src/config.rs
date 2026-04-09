@@ -611,7 +611,7 @@ impl Config {
                 batch_size: self.gateway_batch_size,
                 node_group: self.gateway_node_group.clone(),
                 replica_patch: self.gateway_replica_patch.clone(),
-                post_scale_stabilize_secs: 60, // GW JVMs need warmup time
+                post_scale_stabilize_secs: 180, // GW JVMs need warmup time after wave rollouts
             });
         }
         if !self.webhook_deployment.is_empty() {
