@@ -149,33 +149,43 @@ pub fn run_matrix(
         .collect();
     output::print_matrix_summary(&summary_rows);
 
-    // Resume infrastructure deployments, kustomizations after all scenarios
+    // Resume infrastructure deployments, kustomizations after all scenarios.
+    // Uses retry for critical operations — if these fail, the cluster drifts.
     output::print_matrix_cleanup(skip_scaling);
     if !skip_scaling {
-        // Cleanup each infrastructure deployment (scale to 1, resume HelmRelease)
         for deployment in &config.resolved_infra_deployments() {
-            crate::scaling::cleanup_deployment(kubectl, deployment);
+            retry_critical(&format!("cleanup {}", deployment.name), 3, || {
+                crate::scaling::cleanup_deployment(kubectl, deployment);
+                Ok(())
+            });
         }
 
-        // Resume kustomizations suspended during warmup
         for ks in &config.suspend_kustomizations {
-            let _ = kubectl.run(&[
-                "-n", &config.suspend_kustomizations_namespace,
-                "patch", "kustomization", ks,
-                "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
-            ]);
+            retry_critical(&format!("resume kustomization {ks}"), 3, || {
+                kubectl.run(&[
+                    "-n", &config.suspend_kustomizations_namespace,
+                    "patch", "kustomization", ks,
+                    "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+                ])?;
+                Ok(())
+            });
         }
     }
 
-    // Resume cluster-autoscaler
+    // Resume cluster-autoscaler (critical — prevents $10/hr node waste)
     if let Some(autoscaler) = &config.autoscaler {
-        output::print_action("Resuming cluster-autoscaler...");
-        let _ = kubectl.run(&[
-            "-n", &autoscaler.namespace, "scale", "deployment",
-            &autoscaler.deployment_name,
-            &format!("--replicas={}", autoscaler.replicas),
-        ]);
+        retry_critical("resume cluster-autoscaler", 3, || {
+            kubectl.run(&[
+                "-n", &autoscaler.namespace, "scale", "deployment",
+                &autoscaler.deployment_name,
+                &format!("--replicas={}", autoscaler.replicas),
+            ])?;
+            Ok(())
+        });
     }
+
+    // Verify cleanup succeeded
+    verify_cleanup(kubectl, config);
 
     // Scale burst node group back to 0 — always attempt
     if let Some(ng) = &config.node_group {
@@ -434,4 +444,71 @@ fn run_single_scenario(
     }
 
     result
+}
+
+/// Retry a critical cleanup operation with backoff.
+fn retry_critical<F>(name: &str, max_retries: u32, f: F)
+where
+    F: Fn() -> anyhow::Result<()>,
+{
+    for attempt in 1..=max_retries {
+        match f() {
+            Ok(()) => return,
+            Err(e) if attempt < max_retries => {
+                output::print_warning(&format!(
+                    "{name} failed (attempt {attempt}/{max_retries}): {e}"
+                ));
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            Err(e) => {
+                output::print_warning(&format!(
+                    "{name} FAILED after {max_retries} attempts: {e}"
+                ));
+            }
+        }
+    }
+}
+
+/// Verify cleanup succeeded — warn about any drift.
+fn verify_cleanup(kubectl: &KubeCtl, config: &Config) {
+    let mut warnings = Vec::new();
+
+    // Check HelmReleases are not suspended
+    for deployment in &config.resolved_infra_deployments() {
+        if deployment.helmrelease.is_empty() {
+            continue;
+        }
+        if let Ok(json) = kubectl.get_json(&[
+            "-n", &deployment.namespace, "get",
+            "helmrelease.helm.toolkit.fluxcd.io", &deployment.helmrelease,
+            "-o", "json",
+        ]) {
+            if json["spec"]["suspend"].as_bool() == Some(true) {
+                warnings.push(format!(
+                    "{} HelmRelease '{}' is still suspended",
+                    deployment.name, deployment.helmrelease
+                ));
+            }
+        }
+    }
+
+    // Check kustomizations are not suspended
+    for ks in &config.suspend_kustomizations {
+        if let Ok(json) = kubectl.get_json(&[
+            "-n", &config.suspend_kustomizations_namespace, "get",
+            "kustomization", ks, "-o", "json",
+        ]) {
+            if json["spec"]["suspend"].as_bool() == Some(true) {
+                warnings.push(format!("Kustomization '{ks}' is still suspended"));
+            }
+        }
+    }
+
+    if warnings.is_empty() {
+        output::print_action("Cleanup verified — all resources resumed");
+    } else {
+        for w in &warnings {
+            output::print_warning(&format!("CLEANUP DRIFT: {w}"));
+        }
+    }
 }
