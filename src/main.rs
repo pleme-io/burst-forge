@@ -321,6 +321,23 @@ fn main() -> anyhow::Result<()> {
             output::eprint_warning(&format!("{remaining} pods may still be terminating"));
         }
 
+        // Resume HelmReleases (may have been suspended during scaling)
+        if !cleanup_cfg.gateway_release.is_empty() {
+            let _ = kctl.run(&[
+                "-n", &cleanup_cfg.injection_namespace, "patch",
+                "helmrelease.helm.toolkit.fluxcd.io", &cleanup_cfg.gateway_release,
+                "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+            ]);
+        }
+        if !cleanup_cfg.webhook_release.is_empty() {
+            let _ = kctl.run(&[
+                "-n", &cleanup_cfg.injection_namespace, "patch",
+                "helmrelease.helm.toolkit.fluxcd.io", &cleanup_cfg.webhook_release,
+                "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
+            ]);
+        }
+        output::eprint_status("HelmReleases resumed");
+
         // Resume suspended kustomizations
         for ks in &cleanup_cfg.suspend_kustomizations {
             let _ = kctl.run(&[
@@ -332,6 +349,13 @@ fn main() -> anyhow::Result<()> {
         if !cleanup_cfg.suspend_kustomizations.is_empty() {
             output::eprint_status("Kustomizations resumed");
         }
+
+        // Resume cluster-autoscaler
+        let _ = kctl.run(&[
+            "-n", "kube-system", "scale", "deployment",
+            "cluster-autoscaler-aws-cluster-autoscaler", "--replicas=1",
+        ]);
+        output::eprint_status("Cluster-autoscaler resumed");
 
         // Scale node group to 0
         if let Some(ng) = &cleanup_cfg.node_group {
