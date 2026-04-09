@@ -116,10 +116,12 @@ observability_node_group:
   pods_per_node: 20
   max_nodes: 2
 verify_teardown: true
+# Warmup timeout 1800s — at 174 nodes, image pull through Zot can be slow.
+# Gate 2 passes when DaemonSet matches schedulable nodes (not strict 100%).
 warmup_daemonset:
   namespace: scale-test
   name: image-warmup
-  timeout_secs: 900
+  timeout_secs: 1800
 vector_endpoint: "http://localhost:9500"
 scenarios:
   - name: "gw30-wh16-10000-prewarmed"
