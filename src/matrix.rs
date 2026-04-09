@@ -149,28 +149,13 @@ pub fn run_matrix(
         .collect();
     output::print_matrix_summary(&summary_rows);
 
-    // Resume HelmReleases, kustomizations, and reset replicas after all scenarios
+    // Resume infrastructure deployments, kustomizations after all scenarios
     output::print_matrix_cleanup(skip_scaling);
     if !skip_scaling {
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.gateway_deployment, "--replicas=1",
-        ]);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.webhook_deployment, "--replicas=1",
-        ]);
-
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.gateway_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":false}}"#,
-        ]);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.webhook_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":false}}"#,
-        ]);
+        // Cleanup each infrastructure deployment (scale to 1, resume HelmRelease)
+        for deployment in &config.resolved_infra_deployments() {
+            crate::scaling::cleanup_deployment(kubectl, deployment);
+        }
 
         // Resume kustomizations suspended during warmup
         for ks in &config.suspend_kustomizations {
@@ -180,19 +165,6 @@ pub fn run_matrix(
                 "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
             ]);
         }
-
-        // Resume GW + WH HelmReleases (suspended during scaling).
-        // Flux will reconcile back to the git-defined replica count.
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch",
-            "helmrelease.helm.toolkit.fluxcd.io", &config.gateway_release,
-            "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
-        ]);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch",
-            "helmrelease.helm.toolkit.fluxcd.io", &config.webhook_release,
-            "--type=merge", "-p", r#"{"spec":{"suspend":false}}"#,
-        ]);
     }
 
     // Resume cluster-autoscaler

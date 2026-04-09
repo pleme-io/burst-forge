@@ -192,7 +192,7 @@ pub fn run_phase_2_warmup(
         timings.ipamd_warmup_ms = sub_start.elapsed().as_millis() as u64;
     }
 
-    // 2c: Gateway scaling
+    // 2c: Infrastructure scaling (generic — iterates all deployments by scaling_order)
     let sub_start = Instant::now();
     if !skip_scaling {
         // Suspend kustomizations (prevents GitOps from reverting deployment replicas)
@@ -205,150 +205,21 @@ pub fn run_phase_2_warmup(
             ]);
         }
 
-        // Suspend HelmReleases
         output::print_action("2c. Scaling injection infrastructure...");
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.gateway_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":true}}"#,
-        ]);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch", "helmrelease",
-            &config.webhook_release, "--type=merge",
-            "-p", r#"{"spec":{"suspend":true}}"#,
-        ]);
 
-        // 2c.0: Scale dedicated GW node group BEFORE scaling the deployment.
-        // The scheduler must have somewhere to put N GW pods or the rollout
-        // wait will time out at "GW <fewer>/<expected> ready".
-        if let Some(gng) = &config.gateway_node_group {
-            let needed = gng.desired_for_pods(scenario.gateway_replicas);
-            output::print_action(&format!(
-                "  Gateway nodes: {} pods × {} pods/node => {needed} nodes",
-                scenario.gateway_replicas, gng.pods_per_node
-            ));
-            crate::nodes::scale_infra_node_group(
-                kubectl,
-                gng,
-                needed,
-                "gateway",
-                Duration::from_secs(config.rollout_wait_secs),
-            )?;
-        }
+        // Scale each infrastructure deployment in order (lower scaling_order first).
+        // GW (order=0) scales before WH (order=1) so WH can reach GW on startup.
+        let mut infra = config.resolved_infra_deployments();
+        infra.sort_by_key(|d| d.scaling_order);
 
-        // Scale gateway — wave-based if gateway_batch_size > 0.
-        //
-        // The Akeyless SaaS API throttles at ~5 concurrent auth requests per
-        // access-id (ASM-17539). Without batching, scaling 1→30 creates 30
-        // concurrent cold-starts, only ~5 succeed, the rest CrashLoopBackOff.
-        // With batching, each wave of `batch_size` pods starts, authenticates,
-        // populates the ClusterCache (Redis), and becomes Ready before the
-        // next wave begins. Waves 2+ benefit from the cache and start faster.
-        let target = scenario.gateway_replicas;
-        let batch = config.gateway_batch_size;
-
-        // Suspend the GW HelmRelease so Flux doesn't revert our replica
-        // changes. The kustomize-controller re-applies the HelmRelease
-        // from git periodically, overwriting merge-patches. Suspending
-        // the HelmRelease prevents the helm-controller from reconciling
-        // back to the git-defined value.
-        output::print_action("  Suspending gateway HelmRelease...");
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "patch",
-            "helmrelease.helm.toolkit.fluxcd.io", &config.gateway_release,
-            "--type=merge", "-p", r#"{"spec":{"suspend":true}}"#,
-        ]);
-
-        if batch > 0 && target > batch {
-            let mut current = 0u32;
-            let mut wave = 0u32;
-            while current < target {
-                let next = (current + batch).min(target);
-                wave += 1;
-                output::print_action(&format!(
-                    "  Gateway wave {wave}: {current} -> {next} / {target} replicas..."
-                ));
-                kubectl.run(&[
-                    "-n", &config.injection_namespace, "scale", "deployment",
-                    &config.gateway_deployment,
-                    &format!("--replicas={next}"),
-                ])?;
-
-                let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
-                if let Err(e) = kubectl.run(&[
-                    "-n", &config.injection_namespace, "rollout", "status",
-                    &gw_deploy_path,
-                    &format!("--timeout={}s", config.rollout_wait_secs),
-                ]) {
-                    output::print_warning(&format!(
-                        "Gateway wave {wave} rollout wait: {e}"
-                    ));
-                }
-                current = next;
-            }
-        } else {
-            output::print_action(&format!(
-                "  Gateway -> {target} replicas..."
-            ));
-            kubectl.run(&[
-                "-n", &config.injection_namespace, "scale", "deployment",
-                &config.gateway_deployment,
-                &format!("--replicas={target}"),
-            ])?;
-
-            let gw_deploy_path = format!("deployment/{}", config.gateway_deployment);
-            let _ = kubectl.run(&[
-                "-n", &config.injection_namespace, "rollout", "status",
-                &gw_deploy_path,
-                &format!("--timeout={}s", config.rollout_wait_secs),
-            ]);
+        for deployment in &infra {
+            let target = scenario.replicas_for(&deployment.name);
+            crate::scaling::scale_deployment(kubectl, deployment, target, config.rollout_wait_secs)?;
         }
     }
     #[allow(clippy::cast_possible_truncation)]
     {
         timings.gateway_ms = sub_start.elapsed().as_millis() as u64;
-    }
-
-    // 2d: Webhook scaling
-    let sub_start = Instant::now();
-    if !skip_scaling {
-        // 2d.0: Same dynamic node-group scale for webhook before deployment patch.
-        if let Some(wng) = &config.webhook_node_group {
-            let needed = wng.desired_for_pods(scenario.webhook_replicas);
-            output::print_action(&format!(
-                "  Webhook nodes: {} pods × {} pods/node => {needed} nodes",
-                scenario.webhook_replicas, wng.pods_per_node
-            ));
-            crate::nodes::scale_infra_node_group(
-                kubectl,
-                wng,
-                needed,
-                "webhook",
-                Duration::from_secs(config.rollout_wait_secs),
-            )?;
-        }
-
-        output::print_action(&format!(
-            "  Webhook -> {} replicas...", scenario.webhook_replicas
-        ));
-        // WH HelmRelease is suspended (2a-pre), so kubectl scale works.
-        kubectl.run(&[
-            "-n", &config.injection_namespace, "scale", "deployment",
-            &config.webhook_deployment,
-            &format!("--replicas={}", scenario.webhook_replicas),
-        ])?;
-
-        // Wait for webhook rollout
-        let wh_deploy_path = format!("deployment/{}", config.webhook_deployment);
-        let _ = kubectl.run(&[
-            "-n", &config.injection_namespace, "rollout", "status",
-            &wh_deploy_path,
-            &format!("--timeout={}s", config.rollout_wait_secs),
-        ]);
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        timings.webhook_ms = sub_start.elapsed().as_millis() as u64;
     }
 
     // 2d+: Infrastructure resource patches (WH/GW CPU/memory overrides)

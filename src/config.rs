@@ -59,6 +59,27 @@ pub struct Scenario {
     /// Override webhook memory limit per scenario (e.g., "512Mi").
     #[serde(default)]
     pub webhook_memory_limit: Option<String>,
+
+    /// Per-infrastructure-deployment replica counts (keyed by deployment name).
+    /// Used when `infrastructure_deployments` is configured.
+    /// Falls back to gateway_replicas/webhook_replicas for legacy configs.
+    #[serde(default)]
+    pub infra_replicas: std::collections::HashMap<String, u32>,
+}
+
+impl Scenario {
+    /// Get the target replica count for a named infrastructure deployment.
+    #[must_use]
+    pub fn replicas_for(&self, deployment_name: &str) -> u32 {
+        if let Some(&r) = self.infra_replicas.get(deployment_name) {
+            return r;
+        }
+        match deployment_name {
+            "gateway" => self.gateway_replicas,
+            "webhook" => self.webhook_replicas,
+            _ => 1,
+        }
+    }
 }
 
 /// EKS node group configuration for burst testing.
@@ -477,6 +498,12 @@ pub struct Config {
     #[serde(default = "default_injection_annotation_key")]
     pub injection_annotation_key: String,
 
+    /// Generic infrastructure deployments. When present, replaces the legacy
+    /// gateway_*/webhook_* fields. Each deployment has its own scaling order,
+    /// readiness threshold, and strategy.
+    #[serde(default)]
+    pub infrastructure_deployments: Vec<InfraDeployment>,
+
     /// Backward-compatible fields — migrated to structured configs above.
     /// Prefer `image_cache.registry` over this field.
     #[serde(default)]
@@ -503,7 +530,104 @@ pub struct AutoscalerConfig {
     pub replicas: u32,
 }
 
+/// Scaling strategy for infrastructure deployments.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScalingStrategy {
+    /// Suspend HelmRelease, kubectl scale deployment, resume HR in cleanup.
+    #[default]
+    SuspendAndScale,
+    /// Patch HelmRelease values directly.
+    HelmreleasePatch,
+    /// Just kubectl scale — for non-Flux-managed deployments.
+    DirectScale,
+}
+
+/// Generic infrastructure deployment (replaces separate gateway/webhook concepts).
+/// Each deployment has its own readiness threshold, scaling order, and strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfraDeployment {
+    /// Human-readable name (e.g., "gateway", "webhook").
+    pub name: String,
+    /// Kubernetes namespace.
+    pub namespace: String,
+    /// Deployment name (for kubectl scale).
+    pub deployment: String,
+    /// HelmRelease name (for suspend/resume). Empty = no HelmRelease.
+    #[serde(default)]
+    pub helmrelease: String,
+    /// Label selector for pod queries.
+    #[serde(default)]
+    pub label: String,
+    /// Container name inside the deployment (for resource patches).
+    #[serde(default)]
+    pub container_name: String,
+    /// Readiness threshold (0.0-1.0). 0.9 = 90% pods Ready to pass gate.
+    #[serde(default = "default_full_threshold")]
+    pub readiness_threshold: f64,
+    /// Scaling order (lower = scales first). Same order = sequential in list order.
+    #[serde(default)]
+    pub scaling_order: u32,
+    /// How to scale this deployment.
+    #[serde(default)]
+    pub scaling_strategy: ScalingStrategy,
+    /// Wave batch size for gradual scaling (0 = all at once).
+    #[serde(default)]
+    pub batch_size: u32,
+    /// Dedicated node group (if applicable).
+    #[serde(default)]
+    pub node_group: Option<InfraNodeGroupConfig>,
+    /// HelmRelease replica patch template (JSON with {replicas} placeholder).
+    #[serde(default)]
+    pub replica_patch: String,
+}
+
+fn default_full_threshold() -> f64 { 1.0 }
+
 impl Config {
+    /// Resolve infrastructure deployments from either the new
+    /// `infrastructure_deployments` field or the legacy gateway/webhook fields.
+    #[must_use]
+    pub fn resolved_infra_deployments(&self) -> Vec<InfraDeployment> {
+        if !self.infrastructure_deployments.is_empty() {
+            return self.infrastructure_deployments.clone();
+        }
+        let mut deployments = Vec::new();
+        if !self.gateway_deployment.is_empty() {
+            deployments.push(InfraDeployment {
+                name: "gateway".to_string(),
+                namespace: self.injection_namespace.clone(),
+                deployment: self.gateway_deployment.clone(),
+                helmrelease: self.gateway_release.clone(),
+                label: self.gateway_label.clone(),
+                container_name: self.gateway_container_name.clone(),
+                readiness_threshold: self.gate_gw_readiness_threshold,
+                scaling_order: 0,
+                scaling_strategy: ScalingStrategy::SuspendAndScale,
+                batch_size: self.gateway_batch_size,
+                node_group: self.gateway_node_group.clone(),
+                replica_patch: self.gateway_replica_patch.clone(),
+            });
+        }
+        if !self.webhook_deployment.is_empty() {
+            deployments.push(InfraDeployment {
+                name: "webhook".to_string(),
+                namespace: self.injection_namespace.clone(),
+                deployment: self.webhook_deployment.clone(),
+                helmrelease: self.webhook_release.clone(),
+                label: self.webhook_label.clone(),
+                container_name: self.webhook_container_name.clone(),
+                readiness_threshold: 1.0,
+                scaling_order: 1,
+                scaling_strategy: ScalingStrategy::SuspendAndScale,
+                batch_size: 0,
+                node_group: self.webhook_node_group.clone(),
+                replica_patch: self.webhook_replica_patch.clone(),
+            });
+        }
+        deployments
+    }
+
     /// Resolved pod label selector. Falls back to `app={deployment}` if not set.
     #[must_use]
     pub fn resolved_pod_label(&self) -> String {

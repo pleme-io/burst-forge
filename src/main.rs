@@ -19,6 +19,7 @@ mod phases;
 mod plan;
 mod profile;
 mod report;
+mod scaling;
 mod types;
 mod verify;
 
