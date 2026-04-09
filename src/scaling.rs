@@ -84,6 +84,17 @@ pub fn scale_deployment(
         ]);
     }
 
+    // Post-scale stabilization — let pods fully warm up before the next
+    // deployment starts. Critical for GW→WH ordering: GW JVMs need time
+    // to finish initialization even after passing readiness probe.
+    if deployment.post_scale_stabilize_secs > 0 {
+        output::print_action(&format!(
+            "  {} stabilization: waiting {}s...",
+            deployment.name, deployment.post_scale_stabilize_secs
+        ));
+        std::thread::sleep(Duration::from_secs(deployment.post_scale_stabilize_secs));
+    }
+
     Ok(())
 }
 

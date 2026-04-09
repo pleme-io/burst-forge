@@ -580,6 +580,10 @@ pub struct InfraDeployment {
     /// HelmRelease replica patch template (JSON with {replicas} placeholder).
     #[serde(default)]
     pub replica_patch: String,
+    /// Seconds to wait after scaling completes before the next deployment starts.
+    /// Gives freshly-started pods time to fully warm up (JVM, cache population).
+    #[serde(default)]
+    pub post_scale_stabilize_secs: u64,
 }
 
 fn default_full_threshold() -> f64 { 1.0 }
@@ -607,6 +611,7 @@ impl Config {
                 batch_size: self.gateway_batch_size,
                 node_group: self.gateway_node_group.clone(),
                 replica_patch: self.gateway_replica_patch.clone(),
+                post_scale_stabilize_secs: 60, // GW JVMs need warmup time
             });
         }
         if !self.webhook_deployment.is_empty() {
@@ -623,6 +628,7 @@ impl Config {
                 batch_size: 0,
                 node_group: self.webhook_node_group.clone(),
                 replica_patch: self.webhook_replica_patch.clone(),
+                post_scale_stabilize_secs: 0,
             });
         }
         deployments
