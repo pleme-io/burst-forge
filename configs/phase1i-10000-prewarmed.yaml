@@ -28,7 +28,8 @@ kubeconfig: "~/.kube/scale-test.yaml"
 namespace: scale-test
 deployment: nginx-burst
 qps: 5
-gateway_batch_size: 5
+# Experiment B: larger GW batch (was 5, now 10 with optimized probes)
+gateway_batch_size: 10
 secrets_per_pod: 2
 # Burst pod creation in waves of 2500 to stay within webhook admission
 # capacity. At 16 WH replicas × ~10 calls/sec × 30s timeout = 4800 pods
