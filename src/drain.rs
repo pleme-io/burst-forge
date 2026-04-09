@@ -272,7 +272,7 @@ pub fn verify_starting_line(
     // Pass at 90% GW readiness — one slow cold-start pod shouldn't block.
     #[allow(clippy::cast_precision_loss)]
     let gw_ratio = if expected_gw > 0 { gw_ready as f64 / expected_gw as f64 } else { 1.0 };
-    if gw_ratio < 0.9 {
+    if gw_ratio < config.gate_gw_readiness_threshold {
         anyhow::bail!(
             "Gateway not ready: {gw_ready}/{expected_gw} -- cannot start burst"
         );

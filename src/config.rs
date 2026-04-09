@@ -460,6 +460,23 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub strict_gates: bool,
 
+    /// Cluster-autoscaler management. When present, burst-forge pauses the
+    /// autoscaler at the start of each flow and resumes in cleanup. This
+    /// prevents node drain during experiments.
+    #[serde(default = "default_autoscaler")]
+    pub autoscaler: Option<AutoscalerConfig>,
+
+    /// Gateway readiness threshold for gates (0.0-1.0).
+    /// Default 0.9 — 90% of GW pods must be Ready to pass.
+    /// Set to 1.0 for strict mode.
+    #[serde(default = "default_gw_readiness_threshold")]
+    pub gate_gw_readiness_threshold: f64,
+
+    /// Annotation key for secret injection on burst pods.
+    /// Used when patching pod annotations for multi-secret scenarios.
+    #[serde(default = "default_injection_annotation_key")]
+    pub injection_annotation_key: String,
+
     /// Backward-compatible fields — migrated to structured configs above.
     /// Prefer `image_cache.registry` over this field.
     #[serde(default)]
@@ -468,6 +485,22 @@ pub struct Config {
     /// Backward-compatible: prefer `flux.kustomizations`.
     #[serde(default)]
     pub flux_kustomizations: Vec<String>,
+}
+
+/// Cluster-autoscaler configuration for pause/resume during experiments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoscalerConfig {
+    /// Deployment name (e.g., "cluster-autoscaler-aws-cluster-autoscaler").
+    #[serde(default = "default_autoscaler_deployment")]
+    pub deployment_name: String,
+
+    /// Namespace (e.g., "kube-system").
+    #[serde(default = "default_autoscaler_namespace")]
+    pub namespace: String,
+
+    /// Replica count to restore on resume (default: 1).
+    #[serde(default = "default_autoscaler_replicas")]
+    pub replicas: u32,
 }
 
 impl Config {
@@ -617,12 +650,12 @@ fn default_gateway_replica_patch() -> String {
 fn default_webhook_replica_patch() -> String {
     r#"{"spec":{"values":{"replicaCount":{replicas}}}}"#.to_string()
 }
-fn default_injection_env_prefix() -> String { "AKEYLESS_".to_string() }
-fn default_init_container_name() -> String { "customer-init".to_string() }
-fn default_workload_container_name() -> String { "nginx".to_string() }
-fn default_webhook_container_name() -> String { "akeyless-secrets-injection".to_string() }
-fn default_gateway_container_name() -> String { "akeyless-gateway".to_string() }
-fn default_secret_path_prefix() -> String { "/pleme/test/hello".to_string() }
+fn default_injection_env_prefix() -> String { String::new() }
+fn default_init_container_name() -> String { String::new() }
+fn default_workload_container_name() -> String { String::new() }
+fn default_webhook_container_name() -> String { String::new() }
+fn default_gateway_container_name() -> String { String::new() }
+fn default_secret_path_prefix() -> String { String::new() }
 fn default_injection_mode() -> InjectionMode { InjectionMode::Env }
 fn default_image_cache_namespace() -> String { "image-cache".to_string() }
 fn default_image_cache_label() -> String { "app.kubernetes.io/name=zot".to_string() }
@@ -632,6 +665,12 @@ fn default_secrets_per_pod() -> u32 { 2 }
 fn default_burst_batch_wait() -> u64 { 5 }
 fn default_warmup_timeout() -> u64 { 300 }
 fn default_grace_period() -> u64 { 30 }
+fn default_autoscaler() -> Option<AutoscalerConfig> { None }
+fn default_autoscaler_deployment() -> String { String::new() }
+fn default_autoscaler_namespace() -> String { "kube-system".to_string() }
+fn default_autoscaler_replicas() -> u32 { 1 }
+fn default_gw_readiness_threshold() -> f64 { 0.9 }
+fn default_injection_annotation_key() -> String { String::new() }
 
 /// Discover and load config via shikumi.
 ///
@@ -681,11 +720,11 @@ mod tests {
         assert_eq!(cfg.poll_interval_secs, 5);
         assert_eq!(cfg.cooldown_secs, 15);
         assert_eq!(cfg.drain_timeout_secs, 120);
-        assert_eq!(cfg.init_container_name, "customer-init");
-        assert_eq!(cfg.workload_container_name, "nginx");
-        assert_eq!(cfg.webhook_container_name, "akeyless-secrets-injection");
-        assert_eq!(cfg.gateway_container_name, "api-gateway");
-        assert_eq!(cfg.secret_path_prefix, "/pleme/test/hello");
+        assert!(cfg.init_container_name.is_empty());
+        assert!(cfg.workload_container_name.is_empty());
+        assert!(cfg.webhook_container_name.is_empty());
+        assert!(cfg.gateway_container_name.is_empty());
+        assert!(cfg.secret_path_prefix.is_empty());
     }
 
     #[test]
@@ -935,13 +974,13 @@ mod tests {
     #[test]
     fn config_default_injection_env_prefix() {
         let cfg: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.injection_env_prefix, "AKEYLESS_");
+        assert!(cfg.injection_env_prefix.is_empty());
     }
 
     #[test]
     fn config_default_secret_path_prefix() {
         let cfg: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.secret_path_prefix, "/pleme/test/hello");
+        assert!(cfg.secret_path_prefix.is_empty());
     }
 
     #[test]

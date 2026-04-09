@@ -258,7 +258,7 @@ pub fn check_infrastructure_gate(
         // experiment. Webhook must be exact (admission path is critical).
         #[allow(clippy::cast_precision_loss)]
         let gw_ratio = if expected_gw > 0 { gw_ready as f64 / expected_gw as f64 } else { 1.0 };
-        if gw_ratio >= 0.9
+        if gw_ratio >= config.gate_gw_readiness_threshold
             && gw_desired == expected_gw
             && wh_ready == expected_wh
             && wh_desired == expected_wh
@@ -387,7 +387,7 @@ pub fn check_starting_line_gate(
     // Pass at 90% GW readiness — one slow cold-start pod shouldn't block.
     #[allow(clippy::cast_precision_loss)]
     let gw_ratio = if expected_gw > 0 { gw_ready as f64 / expected_gw as f64 } else { 1.0 };
-    if gw_ratio < 0.9 {
+    if gw_ratio < config.gate_gw_readiness_threshold {
         return Ok(GateResult::fail(
             "[Gate 4]",
             "Starting Line".to_string(),
@@ -467,7 +467,7 @@ pub fn check_drain_gate(
         // Pass when GW ≥90% ready and WH fully ready (both > 0)
         #[allow(clippy::cast_precision_loss)]
         let gw_ratio = if gw_desired > 0 { gw_ready as f64 / gw_desired as f64 } else { 1.0 };
-        if gw_ready > 0 && gw_ratio >= 0.9 && wh_ready > 0 && wh_ready == wh_desired {
+        if gw_ready > 0 && gw_ratio >= config.gate_gw_readiness_threshold && wh_ready > 0 && wh_ready == wh_desired {
             return Ok(GateResult::pass(
                 "[Gate 5]",
                 format!(

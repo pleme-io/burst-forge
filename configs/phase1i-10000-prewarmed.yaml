@@ -51,7 +51,18 @@ suspend_kustomizations:
   - scale-test-workloads
 injection_mode: env
 injection_env_prefix: "AKEYLESS_"
+injection_annotation_key: "akeyless/secret-path"
 injection_namespace: akeyless-system
+gateway_container_name: akeyless-gateway
+webhook_container_name: akeyless-secrets-injection
+init_container_name: customer-init
+workload_container_name: nginx
+secret_path_prefix: "/pleme/test/hello"
+gate_gw_readiness_threshold: 0.9
+autoscaler:
+  deployment_name: cluster-autoscaler-aws-cluster-autoscaler
+  namespace: kube-system
+  replicas: 1
 gateway_deployment: unified-akeyless-gateway
 webhook_deployment: akeyless-secrets-injection
 gateway_label: "app.kubernetes.io/name=akeyless-gateway"

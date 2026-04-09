@@ -397,10 +397,10 @@ pub fn apply_scenario_patches(
             .collect();
         let secret_path = paths.join(",");
         crate::output::print_action(&format!("Setting {secret_count} secrets: {secret_path}"));
+        let mut annotations = serde_json::Map::new();
+        annotations.insert(config.injection_annotation_key.clone(), serde_json::Value::String(secret_path));
         let patch = serde_json::to_string(&serde_json::json!({
-            "spec": {"template": {"metadata": {"annotations": {
-                "akeyless/secret-path": &secret_path
-            }}}}
+            "spec": {"template": {"metadata": {"annotations": annotations}}}
         }))?;
         kubectl.run(&["-n", ns, "patch", "deployment", dep, "--type=strategic", "-p", &patch])?;
     }
