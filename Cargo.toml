@@ -13,6 +13,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 shikumi = { git = "https://github.com/pleme-io/shikumi" }
+# shigoto — typed job-system primitive (theory/SHIGOTO.md). Foundation
+# step for full Dag-based phase orchestration; v0.x carries the Dag +
+# JobId planning surface only, execution still flows through legacy
+# phases.rs. See CLAUDE.md "shigoto migration" section.
+shigoto-types = { git = "https://github.com/pleme-io/shigoto" }
+shigoto-dag = { git = "https://github.com/pleme-io/shigoto" }
 dirs = "6.0"
 ctrlc = "3.4"
 chrono = { version = "0.4", features = ["serde"] }

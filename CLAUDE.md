@@ -46,6 +46,34 @@ Phase 2: WARMUP     -> Gates: Node Ready, Image Warmup, IPAMD Warmup, Infra Read
 Phase 3: EXECUTION  -> burst 0->N, poll, measure
 ```
 
+## shigoto migration
+
+burst-forge is the second production consumer of the typed shigoto
+job-system primitive (per `theory/SHIGOTO.md` §V.1 criterion 1; tend is
+the first). Migration is incremental; the foundation lives in
+`src/shigoto.rs` today, full executor adoption lands phase-by-phase in
+follow-up commits.
+
+### Status
+
+| Step | Status | Surface |
+|---|---|---|
+| **Foundation** | ✓ landed 2026-05-18 | `src/shigoto.rs` — typed JobKindId constants (`burst-forge.reset` / `.warmup` / `.execution`), `plan_dag(config) -> Dag` builder, 3 unit tests proving topology + waves |
+| Phase 1 (reset) as a `Job` | PENDING | `src/jobs/reset.rs` impl `Job` for `BurstForgeResetJob`; wraps `phases::run_phase_1_reset` |
+| Phase 2 (warmup) as a `Job` + 5 gates as `Gate` impls | PENDING | `src/jobs/warmup.rs` + `src/jobs/gates.rs` impl `Gate` trait for each of node-ready / image-warmup / ipamd / infra-ready / starting-line |
+| Phase 3 (execution) as a `Job` with `OutputSink<BurstResult>` | PENDING | `src/jobs/execution.rs` |
+| `matrix::run_matrix` migrated to `InProcessScheduler::execute_dag` | PENDING | `BudgetTree` per JobKind, `RetryPolicy` from existing grace-period config, `AuditFileEmitter` (parallel to Shinryū events) |
+| Shinryū events emitted via custom `TransitionEmitter` impl | PENDING | preserve `events::EventEmitter` semantics; emit MATRIX_START / PHASE_COMPLETE / SCENARIO_COMPLETE from FSM transitions |
+| Legacy `phases.rs` deleted | PENDING | once all scenarios route through scheduler |
+
+### Why incremental, not all-at-once
+
+Full migration touches every executor in `matrix.rs` + `phases.rs` +
+`burst.rs` + `gates.rs`. Phasing protects production: each migration step
+keeps `cargo test` green and leaves the legacy CLI flags + flow configs
+working byte-equivalent. Verified-equivalent Shinryū event output gates
+the legacy-deletion step.
+
 ## Module Map
 
 | Module | Purpose |

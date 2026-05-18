@@ -20,6 +20,7 @@ mod plan;
 mod profile;
 mod report;
 mod scaling;
+mod shigoto;
 mod types;
 mod verify;
 
