@@ -1712,6 +1712,24 @@
           "uses_default_features": false,
           "optional": false,
           "target": "cfg(unix)"
+        },
+        {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": false,
+          "target": "cfg(target_os = \"hermit\")"
+        },
+        {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": false,
+          "target": "cfg(target_os = \"wasi\")"
         }
       ],
       "runtime_dependencies": [
@@ -1723,6 +1741,24 @@
           "uses_default_features": false,
           "optional": false,
           "target": "cfg(unix)"
+        },
+        {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": false,
+          "target": "cfg(target_os = \"hermit\")"
+        },
+        {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": false,
+          "target": "cfg(target_os = \"wasi\")"
         }
       ],
       "build_dependencies": [],
@@ -5380,6 +5416,15 @@
           "target": "cfg(all(tokio_unstable, target_os = \"linux\"))"
         },
         {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": true,
+          "optional": true,
+          "target": "cfg(unix)"
+        },
+        {
           "name": "mio",
           "package_key": "mio-1.2.0",
           "kind": "normal",
@@ -5387,6 +5432,15 @@
           "uses_default_features": false,
           "optional": true,
           "target": null
+        },
+        {
+          "name": "mio",
+          "package_key": "mio-1.2.0",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": true,
+          "target": "cfg(all(tokio_unstable, target_os = \"linux\"))"
         },
         {
           "name": "parking_lot",
@@ -5456,6 +5510,15 @@
           "target": "cfg(all(tokio_unstable, target_os = \"linux\"))"
         },
         {
+          "name": "libc",
+          "package_key": "libc-0.2.183",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": true,
+          "optional": true,
+          "target": "cfg(unix)"
+        },
+        {
           "name": "mio",
           "package_key": "mio-1.2.0",
           "kind": "normal",
@@ -5463,6 +5526,15 @@
           "uses_default_features": false,
           "optional": true,
           "target": null
+        },
+        {
+          "name": "mio",
+          "package_key": "mio-1.2.0",
+          "kind": "normal",
+          "features": [],
+          "uses_default_features": false,
+          "optional": true,
+          "target": "cfg(all(tokio_unstable, target_os = \"linux\"))"
         },
         {
           "name": "parking_lot",
